@@ -16,7 +16,7 @@
 #include <sstream>  // std::ostringstream
 
 // wait function for debug step
-static void DebugPause(const std::string& message);
+void DebugPause(const std::string& message = "Press Enter to continue...");
 
 // Helper function to format strings like printf
 inline std::string string_format(const char* fmt, ...) {

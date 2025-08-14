@@ -27,6 +27,18 @@ const char* stateToString(TestController::State state) {
     }
 }
 
+// Helper function to convert MessageType enum to string for logging
+const char* MessageTypeToString(MessageType type) {
+    switch (type) {
+        case MessageType::CONFIG_HANDSHAKE: return "CONFIG_HANDSHAKE";
+        case MessageType::CONFIG_ACK: return "CONFIG_ACK";
+        case MessageType::DATA_PACKET: return "DATA_PACKET";
+        case MessageType::STATS_EXCHANGE: return "STATS_EXCHANGE";
+        case MessageType::STATS_ACK: return "STATS_ACK";
+        default: return "UNKNOWN";
+    }
+}
+
 /**
  * @brief Constructs the TestController.
  * Initializes network interface, generator, receiver, and the state timeout timer.

@@ -80,8 +80,8 @@ void PacketGenerator::sendNextPacket() {
     // 2. Construct the packet header.
     PacketHeader header;
     header.startCode = PROTOCOL_START_CODE;
-    header.senderId = (config.getMode() == Config::TestMode::CLIENT) ? 1 : 0;
-    header.receiverId = (config.getMode() == Config::TestMode::CLIENT) ? 0 : 1;
+    header.senderId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::CLIENT) : to_underlying(Config::TestMode::SERVER);
+    header.receiverId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::SERVER) : to_underlying(Config::TestMode::CLIENT);
     header.messageType = MessageType::DATA_PACKET;
     header.packetCounter = packetCounter++;
     header.payloadSize = static_cast<uint32_t>(payloadSize);

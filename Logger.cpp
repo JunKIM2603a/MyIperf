@@ -18,11 +18,12 @@ std::atomic<bool> Logger::running(false);
 std::ofstream Logger::logStream;
 
 // wait function for debug step
-void DebugPause(const std::string& message = "Press Enter to continue...") {
-    std::cout << message;
+void DebugPause(const std::string& message) {
+    Logger::log(message);
+    // std::cout << message;
     std::cout.flush();  // flush output buffer to show message
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // flush prior input buffer
-    std::cin.get();     // wait to input enter
+    // std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // flush prior input buffer
+    // std::cin.get();     // wait to input enter
 }
 
 /**

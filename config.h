@@ -3,6 +3,11 @@
 #include <string>
 #include "nlohmann/json.hpp" // For handling JSON data
 
+template <class E>
+constexpr std::underlying_type_t<E> to_underlying(E e) noexcept {
+    return static_cast<std::underlying_type_t<E>>(e);
+}
+
 /**
  * @class Config
  * @brief Holds all configuration settings for the network test.
@@ -17,7 +22,7 @@ public:
      * @enum TestMode
      * @brief Defines the operational modes for the application.
      */
-    enum class TestMode { 
+    enum class TestMode : uint8_t{ 
         CLIENT, // The application will act as a client, initiating the connection.
         SERVER  // The application will act as a server, listening for a connection.
     };
