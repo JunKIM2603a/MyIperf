@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 #include <iostream>
@@ -16,12 +16,7 @@
 #include <sstream>  // std::ostringstream
 
 // wait function for debug step
-void DebugPause(const std::string& message = "Press Enter to continue...") {
-    std::cout << message;
-    std::cout.flush();  // flush output buffer to show message
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // flush prior input buffer
-    std::cin.get();     // wait to input enter
-}
+static void DebugPause(const std::string& message);
 
 // Helper function to format strings like printf
 inline std::string string_format(const char* fmt, ...) {
@@ -123,6 +118,7 @@ private:
     static std::deque<std::string> messageQueue; // Queue to hold pending log messages.
     static std::thread workerThread;            // The dedicated thread for writing logs.
     static std::atomic<bool> running;           // Flag to control the logger's running state.
+    static const std::string Logger::getTimeNow(); // Get System time
 
     // Optional file logging
     static std::ofstream logStream;             // File stream for persistent logs.

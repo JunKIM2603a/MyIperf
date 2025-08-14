@@ -1,4 +1,4 @@
-#include "ConfigParser.h"
+﻿#include "ConfigParser.h"
 #include "Logger.h"
 #include <fstream>      // For file input operations
 #include <stdexcept>    // For standard exceptions

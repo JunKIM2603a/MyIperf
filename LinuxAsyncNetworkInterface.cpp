@@ -1,4 +1,4 @@
-// LinuxAsyncNetworkInterface.cpp
+﻿// LinuxAsyncNetworkInterface.cpp
 #ifndef _WIN32
 #include "LinuxAsyncNetworkInterface.h"
 #include "Logger.h"

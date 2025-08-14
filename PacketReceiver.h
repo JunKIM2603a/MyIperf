@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "NetworkInterface.h"
 #include "Protocol.h"

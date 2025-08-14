@@ -1,4 +1,4 @@
-#include "CLIHandler.h"
+﻿#include "CLIHandler.h"
 #include "Logger.h"
 #include <iostream>
 #include <algorithm> // Required for std::transform

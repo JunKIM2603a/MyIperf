@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "TestController.h"
 #include "ConfigParser.h"

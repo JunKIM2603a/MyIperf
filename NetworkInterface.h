@@ -1,4 +1,4 @@
-// NetworkInterface.h
+﻿// NetworkInterface.h
 #pragma once
 
 #include <string>

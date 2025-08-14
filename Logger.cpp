@@ -1,4 +1,4 @@
-#include "Logger.h"
+﻿#include "Logger.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -16,6 +16,14 @@ std::deque<std::string> Logger::messageQueue;
 std::thread Logger::workerThread;
 std::atomic<bool> Logger::running(false);
 std::ofstream Logger::logStream;
+
+// wait function for debug step
+void DebugPause(const std::string& message = "Press Enter to continue...") {
+    std::cout << message;
+    std::cout.flush();  // flush output buffer to show message
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // flush prior input buffer
+    std::cin.get();     // wait to input enter
+}
 
 /**
  * @brief Starts the logging service.
@@ -38,7 +46,7 @@ void Logger::start() {
     try {
         std::ostringstream name;
 #ifdef _WIN32
-        name << "ipeftc_" << GetCurrentProcessId() << ".log";
+        name << "ipeftc_" << "_" << GetCurrentProcessId() << ".log";
 #else
         name << "ipeftc_" << getpid() << ".log";
 #endif
@@ -114,6 +122,17 @@ void Logger::writeFinalReport(const std::string& role,
 }
 
 /**
+ * @brief Get System time to Log
+ */
+const std::string Logger::getTimeNow() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+    std::ostringstream oss;
+    oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] ";
+    return oss.str();
+}
+
+/**
  * @brief The main function for the logger's worker thread.
  * It waits for messages in the queue and prints them to the console.
  */
@@ -140,7 +159,7 @@ void Logger::logWorker() {
             std::time_t now_c = std::chrono::system_clock::to_time_t(now);
             std::ostringstream oss;
             oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] " << msg;
-            const std::string out = oss.str();
+            const std::string out =  oss.str();
             // Colorize for console
             const std::string colored = [&]() {
                 if (msg.rfind("Error:", 0) == 0) return std::string("\x1b[31m") + out + "\x1b[0m"; // red

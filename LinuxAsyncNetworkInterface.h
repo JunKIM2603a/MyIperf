@@ -1,4 +1,4 @@
-// LinuxAsyncNetworkInterface.h
+﻿// LinuxAsyncNetworkInterface.h
 #pragma once
 
 #ifndef _WIN32 // Guard for Linux-only compilation

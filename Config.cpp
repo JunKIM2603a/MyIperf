@@ -1,4 +1,4 @@
-#include "Config.h"
+﻿#include "Config.h"
 #include <stdexcept> // Required for std::invalid_argument
 
 /**
