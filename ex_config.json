@@ -1,0 +1,6 @@
+{
+    "packetSize": 8192,
+    "protocol": "TCP",
+    "targetIP": "127.0.0.1",
+    "port": 5201
+}
