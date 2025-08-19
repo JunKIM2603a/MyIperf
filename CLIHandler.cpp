@@ -32,8 +32,11 @@ void CLIHandler::run(int argc, char* argv[]) {
         // If in server mode, wait for the test to complete before shutting down.
         if (config.getMode() == Config::TestMode::SERVER) {
             Logger::log("Info: Server is running. Waiting for the test to complete...");
-            // Block until the test completion is signaled.
-            testController.getTestCompletionFuture().get();
+            // Block until the test completion is signaled by TestController
+            {
+                std::unique_lock<std::mutex> lock(testController.m_cliBlockMutex);
+                testController.m_cliBlockCv.wait(lock, [&]{ return testController.m_cliBlockFlag.load(); });
+            }
             testController.stopTest();
             Logger::log("Info: Server test finished. Shutting down.");
         }

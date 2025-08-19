@@ -43,7 +43,7 @@ const char* MessageTypeToString(MessageType type) {
  * @brief Constructs the TestController.
  * Initializes network interface, generator, receiver, and the state timeout timer.
  */
-TestController::TestController() : currentState(State::IDLE), m_expectedDataPacketCounter(0), testCompletionPromise_set(false) {
+TestController::TestController() : currentState(State::IDLE), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
     // Select the appropriate network interface based on the operating system.
 #ifdef _WIN32
     networkInterface = std::make_unique<WinIOCPNetworkInterface>();
@@ -70,6 +70,8 @@ TestController::~TestController() {
 void TestController::startTest(const Config& config) {
     m_expectedDataPacketCounter = 0;
     testCompletionPromise = std::promise<void>(); // Reset the completion promise for the new test.
+    testCompletionPromise_set = false; // Reset flag for new test.
+    m_cliBlockFlag = false; // Reset for new test.
     this->currentConfig = config; // Store the configuration for this session.
 
     std::string logMessage = "Info: Starting test in ";
@@ -120,11 +122,16 @@ void TestController::stopTest() {
  */
 void TestController::transitionTo(State newState) {
     std::lock_guard<std::mutex> lock(m_stateMachineMutex);
+    transitionTo_nolock(newState);
+}
+
+void TestController::transitionTo_nolock(State newState) {
     currentState = newState;
     Logger::log("Info: Transitioning to state: " + std::string(stateToString(newState)));
     switch (newState) {
         case State::CONNECTING: {
             Logger::log("Info: Client attempting to connect to " + currentConfig.getTargetIP() + ":" + std::to_string(currentConfig.getPort()));
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             networkInterface->asyncConnect(currentConfig.getTargetIP(), currentConfig.getPort(), [this](bool success) {
                 if (success) {
                     Logger::log("Info: Client connected successfully. Starting packet receiver.");
@@ -149,6 +156,7 @@ void TestController::transitionTo(State newState) {
         }
         case State::ACCEPTING: {
             Logger::log("Info: Server waiting for a client connection on " + currentConfig.getTargetIP() + ":" + std::to_string(currentConfig.getPort()));
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             networkInterface->asyncAccept([this](bool success, const std::string& clientIP, int clientPort) {
                 if (success) {
                     Logger::log("Info: Server accepted a client from " + clientIP + ":" + std::to_string(clientPort));
@@ -171,6 +179,7 @@ void TestController::transitionTo(State newState) {
         }
         case State::SENDING_CONFIG: {
             Logger::log("Info: Client sending configuration packet.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             std::string configStr = currentConfig.toJson().dump();
             std::vector<char> configData(configStr.begin(), configStr.end());
 
@@ -197,14 +206,17 @@ void TestController::transitionTo(State newState) {
         }
         case State::WAITING_FOR_ACK: {
             Logger::log("Info: Client waiting for server acknowledgment.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             break;
         }
         case State::WAITING_FOR_CONFIG: {
             Logger::log("Info: Server waiting for client configuration packet.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             break;
         }
         case State::RUNNING_TEST: {
             Logger::log("Info: Handshake complete. Starting data transmission test.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             m_testStartTime = std::chrono::steady_clock::now();
             if (currentConfig.getMode() == Config::TestMode::CLIENT) {
                 packetGenerator->start(currentConfig, [this]() {
@@ -216,11 +228,13 @@ void TestController::transitionTo(State newState) {
         }
         case State::EXCHANGING_STATS: {
             Logger::log("Info: Client initiating statistics exchange.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             sendClientStatsAndAwaitAck();
             break;
         }
         case State::FINISHED: {
             Logger::log("Info: Test finished successfully. Shutting down.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             if (currentConfig.getMode() == Config::TestMode::CLIENT) {
                 const double testDurationSec = packetGenerator->getTestDuration();
                 const long long bytesSent = packetGenerator->getTotalBytesSent();
@@ -240,23 +254,38 @@ void TestController::transitionTo(State newState) {
                     stats.throughputMbps
                 );
             }
-            stopTest();
+            std::thread(&TestController::stopTest, this).detach();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
             }
+            // Notify CLIHandler to unblock
+            {
+                std::lock_guard<std::mutex> lock(m_cliBlockMutex);
+                m_cliBlockFlag = true;
+            }
+            m_cliBlockCv.notify_all();
             break;
         }
         case State::ERRORED: {
             Logger::log("Error: An unrecoverable error occurred. Shutting down.");
-            stopTest();
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
+            std::thread(&TestController::stopTest, this).detach();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
             }
+            // Notify CLIHandler to unblock
+            {
+                std::lock_guard<std::mutex> lock(m_cliBlockMutex);
+                m_cliBlockFlag = true;
+            }
+            m_cliBlockCv.notify_all();
             break;
         }
         default:
+            Logger::log("Warning: Unhandled state transition: " + std::string(stateToString(newState)));
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             break;
     }
 }
@@ -267,11 +296,12 @@ void TestController::transitionTo(State newState) {
  * @param payload The packet payload.
  */
 void TestController::onPacket(const PacketHeader& header, const std::vector<char>& payload) {
-    //std::lock_guard<std::mutex> lock(m_stateMachineMutex);
+    std::lock_guard<std::mutex> lock(m_stateMachineMutex);
     
     if (currentConfig.getMode() == Config::TestMode::SERVER) {
         switch (header.messageType) {
             case MessageType::CONFIG_HANDSHAKE:
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 if (currentState == State::WAITING_FOR_CONFIG) {
                     Logger::log("Info: Server received config packet.");
                     try {
@@ -303,6 +333,7 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                 break;
             case MessageType::STATS_EXCHANGE: {
                 Logger::log("Info: Server received STATS_EXCHANGE from client.");
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 try {
                     using json = nlohmann::json;
                     std::string stats_str(payload.begin(), payload.end());
@@ -324,25 +355,29 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                 break;
             }
             default:
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 // Data packets are handled by the PacketReceiver directly, not here.
                 break;
         }
     } else { // CLIENT
         switch (header.messageType) {
             case MessageType::CONFIG_ACK:
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 if (currentState == State::WAITING_FOR_ACK) {
                     Logger::log("Info: Client received server ACK. Starting test.");
-                    transitionTo(State::RUNNING_TEST);
+                    transitionTo_nolock(State::RUNNING_TEST);
                 }
                 break;
             case MessageType::STATS_ACK:
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 if (currentState == State::EXCHANGING_STATS) {
                     Logger::log("Info: Client received STATS_ACK. Finalizing test.");
-                    transitionTo(State::FINISHED);
+                    transitionTo_nolock(State::FINISHED);
                 }
                 break;
             default:
                 Logger::log("Warning: Client received an unexpected message type: " + std::to_string((int)header.messageType));
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 break;
         }
     }

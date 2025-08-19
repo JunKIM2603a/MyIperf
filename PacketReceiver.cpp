@@ -170,11 +170,15 @@ void PacketReceiver::processBuffer() {
             std::lock_guard<std::mutex> lock(statsMutex);
             currentBytesReceived += totalPacketSize;
             m_totalPacketsReceived++;
-            if (header->packetCounter != expectedPacketCounter) {
-                m_sequenceErrorCount++;
-                expectedPacketCounter = header->packetCounter;
+            // Sequence checking should only apply to data packets.
+            if (header->messageType == MessageType::DATA_PACKET) {
+                if (header->packetCounter != expectedPacketCounter) {
+                    m_sequenceErrorCount++;
+                    // When a sequence error occurs, we resync to the new counter.
+                    expectedPacketCounter = header->packetCounter;
+                }
+                expectedPacketCounter++;
             }
-            expectedPacketCounter++;
         } else {
             Logger::log("Error: Checksum validation failed. Discarding one byte to find the next packet.");
             m_receiveBuffer.erase(m_receiveBuffer.begin());

@@ -66,6 +66,7 @@ public:
     std::future<void> getTestCompletionFuture() { return testCompletionPromise.get_future(); }
 
 private:
+    friend class CLIHandler;
     // --- Core Components ---
     std::unique_ptr<NetworkInterface> networkInterface;
     std::unique_ptr<PacketGenerator> packetGenerator;
@@ -80,6 +81,10 @@ private:
     uint32_t m_expectedDataPacketCounter;   // Counter for validating packet sequence.
     std::atomic<long long> m_contentMismatchCount{0}; // Payload content mismatches counted on server side.
     std::chrono::steady_clock::time_point m_testStartTime; // Timestamp when RUNNING_TEST started
+
+    std::mutex m_cliBlockMutex;
+    std::condition_variable m_cliBlockCv;
+    std::atomic<bool> m_cliBlockFlag; // Set to true when test is finished/errored
 
     
 
@@ -99,8 +104,15 @@ private:
 
     /**
      * @brief Transitions the internal state machine to a new state.
+     * This function is thread-safe and acquires a lock.
      */
     void transitionTo(State newState);
+
+    /**
+     * @brief The actual implementation of the state transition.
+     * This function is NOT thread-safe and must be called only when the state machine mutex is already held.
+     */
+    void transitionTo_nolock(State newState);
 
     /**
      * @brief Cancels any outstanding state timers (no-op placeholder).
