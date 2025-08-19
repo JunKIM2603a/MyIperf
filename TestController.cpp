@@ -267,7 +267,7 @@ void TestController::transitionTo(State newState) {
  * @param payload The packet payload.
  */
 void TestController::onPacket(const PacketHeader& header, const std::vector<char>& payload) {
-    std::lock_guard<std::mutex> lock(m_stateMachineMutex);
+    //std::lock_guard<std::mutex> lock(m_stateMachineMutex);
     
     if (currentConfig.getMode() == Config::TestMode::SERVER) {
         switch (header.messageType) {
