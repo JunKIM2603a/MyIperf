@@ -1,4 +1,5 @@
 ﻿#include "TestController.h"
+#include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
 #include "WinIOCPNetworkInterface.h"
@@ -160,6 +161,7 @@ void TestController::transitionTo_nolock(State newState) {
             networkInterface->asyncAccept([this](bool success, const std::string& clientIP, int clientPort) {
                 if (success) {
                     Logger::log("Info: Server accepted a client from " + clientIP + ":" + std::to_string(clientPort));
+                    // Start receiver immediately to handle config handshake
                     packetReceiver->start(
                         [this](const PacketHeader& header, const std::vector<char>& payload) {
                             onPacket(header, payload);
@@ -223,6 +225,9 @@ void TestController::transitionTo_nolock(State newState) {
                     Logger::log("Info: Client generator completed.");
                     onTestCompleted();
                 });
+            } else { // SERVER
+                // Reset stats here to only measure the data transfer phase
+                packetReceiver->resetStats();
             }
             break;
         }
@@ -236,23 +241,11 @@ void TestController::transitionTo_nolock(State newState) {
             Logger::log("Info: Test finished successfully. Shutting down.");
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             if (currentConfig.getMode() == Config::TestMode::CLIENT) {
-                const double testDurationSec = packetGenerator->getTestDuration();
-                const long long bytesSent = packetGenerator->getTotalBytesSent();
-                const long long pktsSent  = packetGenerator->getTotalPacketsSent();
-                double mbps = 0.0;
-                if (testDurationSec > 0.0) mbps = (static_cast<double>(bytesSent) * 8.0) / testDurationSec / 1'000'000.0;
-                Logger::writeFinalReport("CLIENT", bytesSent, pktsSent, 0, 0, testDurationSec, mbps);
+                TestStats localStats = packetGenerator->getStats();
+                Logger::writeFinalReport("CLIENT", localStats, m_remoteStats);
             } else { // SERVER
-                ReceiverStats stats = packetReceiver->getStats();
-                Logger::writeFinalReport(
-                    "SERVER",
-                    stats.totalBytesReceived,
-                    stats.totalPacketsReceived,
-                    stats.failedChecksumCount,
-                    stats.sequenceErrorCount,
-                    std::chrono::duration<double>(stats.duration).count(),
-                    stats.throughputMbps
-                );
+                TestStats localStats = packetReceiver->getStats();
+                Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
             std::thread(&TestController::stopTest, this).detach();
             if (!testCompletionPromise_set) {
@@ -270,6 +263,13 @@ void TestController::transitionTo_nolock(State newState) {
         case State::ERRORED: {
             Logger::log("Error: An unrecoverable error occurred. Shutting down.");
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
+            if (currentConfig.getMode() == Config::TestMode::CLIENT) {
+                TestStats localStats = packetGenerator->getStats();
+                Logger::writeFinalReport("CLIENT", localStats, m_remoteStats);
+            } else { // SERVER
+                TestStats localStats = packetReceiver->getStats();
+                Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
+            }
             std::thread(&TestController::stopTest, this).detach();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
@@ -334,22 +334,40 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
             case MessageType::STATS_EXCHANGE: {
                 Logger::log("Info: Server received STATS_EXCHANGE from client.");
                 DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
+                
+                // Parse client's full stats and store them as remote stats
                 try {
                     using json = nlohmann::json;
                     std::string stats_str(payload.begin(), payload.end());
                     json stats_payload = json::parse(stats_str);
+                    m_remoteStats = stats_payload.get<TestStats>();
                     Logger::log("Info: Client Stats: " + stats_payload.dump());
                 } catch(const std::exception& e) {
                     Logger::log("Warning: Could not parse client stats: " + std::string(e.what()));
                 }
 
-                PacketHeader ack{};
-                ack.startCode = PROTOCOL_START_CODE;
-                ack.messageType = MessageType::STATS_ACK;
-                std::vector<char> pkt(sizeof(PacketHeader));
-                std::memcpy(pkt.data(), &ack, sizeof(PacketHeader));
-                networkInterface->asyncSend(pkt, [this](size_t){
-                    Logger::log("Info: Server sent STATS_ACK.");
+                // Send server stats back to client
+                TestStats serverStats = packetReceiver->getStats();
+                using json = nlohmann::json;
+                json ack_payload = serverStats; // Use the to_json function implicitly
+                std::string ack_payload_str = ack_payload.dump();
+                
+                std::vector<char> payload_data(ack_payload_str.begin(), ack_payload_str.end());
+
+                PacketHeader ackHeader{};
+                ackHeader.startCode = PROTOCOL_START_CODE;
+                ackHeader.messageType = MessageType::STATS_ACK;
+                ackHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
+                ackHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
+
+                std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
+                std::memcpy(packet.data(), &ackHeader, sizeof(PacketHeader));
+                if (!payload_data.empty()) {
+                    std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
+                }
+
+                networkInterface->asyncSend(packet, [this](size_t){
+                    Logger::log("Info: Server sent STATS_ACK with its stats.");
                     transitionTo(State::FINISHED);
                 });
                 break;
@@ -372,6 +390,16 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                 DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 if (currentState == State::EXCHANGING_STATS) {
                     Logger::log("Info: Client received STATS_ACK. Finalizing test.");
+                    // Parse and store server stats
+                    try {
+                        using json = nlohmann::json;
+                        std::string stats_str(payload.begin(), payload.end());
+                        json stats_payload = json::parse(stats_str);
+                        m_remoteStats = stats_payload.get<TestStats>(); // Use from_json implicitly
+                        Logger::log("Info: Server Stats: " + stats_payload.dump());
+                    } catch (const std::exception& e) {
+                        Logger::log("Warning: Could not parse server stats: " + std::string(e.what()));
+                    }
                     transitionTo_nolock(State::FINISHED);
                 }
                 break;
@@ -390,9 +418,8 @@ void TestController::onTestCompleted() {
 
 void TestController::sendClientStatsAndAwaitAck() {
     using json = nlohmann::json;
-    json stats_payload;
-    stats_payload["totalBytesSent"] = packetGenerator->getTotalBytesSent();
-    stats_payload["totalPacketsSent"] = packetGenerator->getTotalPacketsSent();
+    TestStats clientStats = packetGenerator->getStats();
+    json stats_payload = clientStats; // Use the to_json function implicitly
     std::string payload_str = stats_payload.dump();
 
     std::vector<char> payload_data(payload_str.begin(), payload_str.end());

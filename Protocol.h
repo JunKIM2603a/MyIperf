@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include "nlohmann/json.hpp"
 
 /**
  * @enum MessageType
@@ -14,6 +15,52 @@ enum class MessageType : uint8_t {
     STATS_EXCHANGE   = 3, // Sent after the test to exchange performance statistics.
     STATS_ACK        = 4  // An acknowledgment of receiving statistics.
 };
+
+/**
+ * @struct TestStats
+ * @brief Holds comprehensive statistics for a test, including sent and received data.
+ */
+struct TestStats {
+    long long totalBytesSent;           // Total bytes sent.
+    long long totalPacketsSent;         // Total packets sent.
+    long long totalBytesReceived;       // Total bytes received.
+    long long totalPacketsReceived;     // Total packets received.
+    long long failedChecksumCount;      // Number of packets that failed checksum validation.
+    long long sequenceErrorCount;       // Number of packets received out of sequence.
+    double duration;                    // Duration of the test in seconds.
+    double throughputMbps;              // Calculated throughput in Megabits per second.
+
+    // Default constructor to initialize all stats to zero.
+    TestStats() : totalBytesSent(0), totalPacketsSent(0), totalBytesReceived(0), totalPacketsReceived(0),
+                  failedChecksumCount(0), sequenceErrorCount(0), duration(0.0), throughputMbps(0.0) {}
+};
+
+namespace nlohmann {
+    template <>
+    struct adl_serializer<TestStats> {
+        static void to_json(json& j, const TestStats& s) {
+            j = nlohmann::json{{"totalBytesSent", s.totalBytesSent},
+                                 {"totalPacketsSent", s.totalPacketsSent},
+                                 {"totalBytesReceived", s.totalBytesReceived},
+                                 {"totalPacketsReceived", s.totalPacketsReceived},
+                                 {"failedChecksumCount", s.failedChecksumCount},
+                                 {"sequenceErrorCount", s.sequenceErrorCount},
+                                 {"duration", s.duration},
+                                 {"throughputMbps", s.throughputMbps}};
+        }
+
+        static void from_json(const json& j, TestStats& s) {
+            j.at("totalBytesSent").get_to(s.totalBytesSent);
+            j.at("totalPacketsSent").get_to(s.totalPacketsSent);
+            j.at("totalBytesReceived").get_to(s.totalBytesReceived);
+            j.at("totalPacketsReceived").get_to(s.totalPacketsReceived);
+            j.at("failedChecksumCount").get_to(s.failedChecksumCount);
+            j.at("sequenceErrorCount").get_to(s.sequenceErrorCount);
+            j.at("duration").get_to(s.duration);
+            j.at("throughputMbps").get_to(s.throughputMbps);
+        }
+    };
+}
 
 // Use #pragma pack(push, 1) to disable struct padding.
 // This ensures a precise byte layout for network transmission.

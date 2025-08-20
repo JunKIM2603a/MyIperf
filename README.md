@@ -22,8 +22,8 @@ cd D:\01_SW2_Project\MyIperf\
 //# ./IPEFTC --mode client --config client_config.json
 
 cd D:\01_SW2_Project\MyIperf
-.\build\Debug\IPEFTC.exe --mode client --target 127.0.0.1 --port 5201 --packet-size 8192 
-.\build\Release\IPEFTC.exe --mode client --target 127.0.0.1 --port 5201 --packet-size 8192 
+.\build\Debug\IPEFTC.exe --mode client --target 127.0.0.1 --port 5201 --packet-size 8192 --num-packets 100
+.\build\Release\IPEFTC.exe --mode client --target 127.0.0.1 --port 5201 --packet-size 8192 --num-packets 100
 
 ---
 

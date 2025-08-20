@@ -81,6 +81,7 @@ private:
     uint32_t m_expectedDataPacketCounter;   // Counter for validating packet sequence.
     std::atomic<long long> m_contentMismatchCount{0}; // Payload content mismatches counted on server side.
     std::chrono::steady_clock::time_point m_testStartTime; // Timestamp when RUNNING_TEST started
+    TestStats m_remoteStats; // Added for remote stats
 
     std::mutex m_cliBlockMutex;
     std::condition_variable m_cliBlockCv;

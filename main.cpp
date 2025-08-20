@@ -10,6 +10,17 @@
  * @return 0 on successful execution, non-zero otherwise.
  */
 int main(int argc, char* argv[]) {
+
+    // Iterate through all command-line arguments.
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "--help" || arg == "-h") {
+            CLIHandler::printHelp();
+            exit(0);
+        }
+    }
+
     // Start the asynchronous logger service.
     Logger::start();
     Logger::log("Info: IPEFTC (IPerf Test Client/Server) application starting.");

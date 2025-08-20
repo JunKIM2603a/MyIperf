@@ -10,6 +10,7 @@
 #include <fstream>
 #include <cstdarg>
 #include <vector>
+#include "Protocol.h"
 
 
 #include <cstdlib>  // std::abort
@@ -99,12 +100,8 @@ public:
     static void writeStats(double throughputMbps, double duration, long long totalBytes);
 
     static void writeFinalReport(const std::string& role,
-                                 long long totalBytes,
-                                 long long totalPackets,
-                                 long long checksumErrors,
-                                 long long sequenceErrors,
-                                 double durationSeconds,
-                                 double throughputMbps);
+                                 const TestStats& localStats,
+                                 const TestStats& remoteStats);
 
 private:
     /**

@@ -136,7 +136,18 @@ bool PacketGenerator::shouldContinueSending() const {
     return static_cast<int>(packetCounter) < numPackets;
 }
 
-double PacketGenerator::getTestDuration() const {
-    if (m_endTime <= m_startTime) return 0.0;
-    return std::chrono::duration<double>(m_endTime - m_startTime).count();
+TestStats PacketGenerator::getStats() const {
+    TestStats stats;
+    stats.totalBytesSent = totalBytesSent.load();
+    stats.totalPacketsSent = totalPacketsSent.load();
+    if (m_endTime > m_startTime) {
+        stats.duration = std::chrono::duration<double>(m_endTime - m_startTime).count();
+        if (stats.duration > 0) {
+            // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
+            stats.throughputMbps = (static_cast<double>(stats.totalBytesSent) * 8.0) / stats.duration / 1'000'000.0;
+        }
+    }
+    // Received stats, checksum errors, sequence errors are not applicable for generator, so they remain 0 (default initialized)
+    return stats;
 }
+

@@ -70,6 +70,7 @@ void Logger::stop() {
     }
     if (logStream.is_open()) {
         logStream.flush();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         logStream.close();
     }
 }
@@ -95,30 +96,39 @@ void Logger::log(const std::string& message) {
  * @param duration Test duration in seconds.
  * @param totalBytes Total bytes transferred.
  */
-void Logger::writeStats(double throughputMbps, double duration, long long totalBytes) {
-    if (!running) return;
-    log("--- Test Results ---");
-    log("  Duration: " + std::to_string(duration) + " seconds");
-    log("  Total Data Transferred: " + std::to_string(totalBytes) + " bytes");
-    log("  Average Throughput: " + std::to_string(throughputMbps) + " Mbps");
-    log("--------------------");
-}
-
 void Logger::writeFinalReport(const std::string& role,
-                              long long totalBytes,
-                              long long totalPackets,
-                              long long checksumErrors,
-                              long long sequenceErrors,
-                              double durationSeconds,
-                              double throughputMbps) {
+                              const TestStats& localStats,
+                              const TestStats& remoteStats) {
     if (!running) return;
+
     log("==== Final Report (" + role + ") ====");
-    log("  Total Bytes        : " + std::to_string(totalBytes));
-    log("  Total Packets      : " + std::to_string(totalPackets));
-    log("  Checksum Errors    : " + std::to_string(checksumErrors));
-    log("  Sequence Errors    : " + std::to_string(sequenceErrors));
-    log("  Duration (s)       : " + std::to_string(durationSeconds));
-    log("  Throughput (Mbps)  : " + std::to_string(throughputMbps));
+    log("--- Local Stats (This machine's perspective) ---");
+    // The following stats are from the perspective of this application instance.
+    // If this is the CLIENT, it reports how much it SENT.
+    // If this is the SERVER, it reports how much it RECEIVED.
+    log("  Total Bytes Sent   : " + std::to_string(localStats.totalBytesSent) + " (Total bytes this machine attempted to send)");
+    log("  Total Packets Sent : " + std::to_string(localStats.totalPacketsSent) + " (Total packets this machine attempted to send)");
+    log("  Total Bytes Recv   : " + std::to_string(localStats.totalBytesReceived) + " (Total bytes this machine received, including headers)");
+    log("  Total Packets Recv : " + std::to_string(localStats.totalPacketsReceived) + " (Total data packets this machine received)");
+    log("  Checksum Errors    : " + std::to_string(localStats.failedChecksumCount) + " (Packets received by this machine with an invalid checksum)");
+    log("  Sequence Errors    : " + std::to_string(localStats.sequenceErrorCount) + " (Data packets received by this machine out of order)");
+    log("  Duration (s)       : " + std::to_string(localStats.duration) + " (The duration of the data transfer phase in seconds)");
+    log("  Throughput (Mbps)  : " + std::to_string(localStats.throughputMbps) + " (Calculated as: [Total Bytes * 8] / [Duration * 1,000,000])");
+
+    if (role == "CLIENT" || role == "SERVER") { 
+        log("--- Remote Stats (Remote machine's perspective) ---");
+        // The following stats are reported by the remote peer.
+        // If this is the CLIENT, these are the SERVER's stats (how much it RECEIVED).
+        // If this is the SERVER, these are the CLIENT's stats (how much it SENT).
+        log("  Total Bytes Sent   : " + std::to_string(remoteStats.totalBytesSent) + " (Total bytes the remote machine sent)");
+        log("  Total Packets Sent : " + std::to_string(remoteStats.totalPacketsSent) + " (Total packets the remote machine sent)");
+        log("  Total Bytes Recv   : " + std::to_string(remoteStats.totalBytesReceived) + " (Total bytes the remote machine received)");
+        log("  Total Packets Recv : " + std::to_string(remoteStats.totalPacketsReceived) + " (Total data packets the remote machine received)");
+        log("  Checksum Errors    : " + std::to_string(remoteStats.failedChecksumCount) + " (Packets received by the remote machine with an invalid checksum)");
+        log("  Sequence Errors    : " + std::to_string(remoteStats.sequenceErrorCount) + " (Data packets received by the remote machine out of order)");
+        log("  Duration (s)       : " + std::to_string(remoteStats.duration) + " (The remote machine's measurement of the test duration)");
+        log("  Throughput (Mbps)  : " + std::to_string(remoteStats.throughputMbps) + " (The remote machine's calculated throughput)");
+    }
     log("================================");
 }
 

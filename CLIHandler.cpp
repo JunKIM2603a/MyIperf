@@ -20,7 +20,7 @@ void CLIHandler::run(int argc, char* argv[]) {
     // If no arguments are provided, display help and exit.
     if (argc < 2) {
         printHelp();
-        return;
+        exit(0);
     }
 
     try {
@@ -44,6 +44,7 @@ void CLIHandler::run(int argc, char* argv[]) {
         // Log any errors that occur during setup or execution.
         Logger::log("Error: " + std::string(e.what()));
         printHelp();
+        exit(0);
     }
 }
 
@@ -63,8 +64,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
         std::string arg = argv[i];
 
         if (arg == "--help" || arg == "-h") {
-            printHelp();
-            exit(0);
+            // This is now handled in main.cpp, so we just ignore it here.
         } else if (arg == "--mode" && i + 1 < argc) {
             mode = argv[++i];
             // Convert mode to uppercase for case-insensitive comparison.
@@ -114,15 +114,39 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
 /**
  * @brief Prints the command-line usage instructions.
  */
-void CLIHandler::printHelp() const {
-    std::cout << "Usage: ipeftc --mode <client|server> [options]\n"
-              << "\nOptions:\n"
+void CLIHandler::printHelp() {
+    std::cout << "MyIperf - A simple network performance testing tool\n\n" \
+              << "DESCRIPTION:\n"
+              << "  This tool measures network throughput between a client and a server. \n"
+              << "  It works by sending a configured number of packets of a specific size \n"
+              << "  from a client to a server and measuring the data transfer rate.\n\n"
+              << "  The client and server exchange statistics at the end of the test, \n"
+              << "  so both sides will display a full report including the remote peer's perspective.\n\n"
+              << "USAGE:\n"
+              << "  ipeftc --mode <client|server> [options]\n\n"
+              << "OPTIONS:\n"
               << "  --mode <client|server>    Specify the operating mode (required).\n"
-              << "  --config <path>           Path to a JSON configuration file.\n"
-              << "  --target <ip_address>     Target IP address for the client.\n"
-              << "  --port <port_number>      Port number for the connection.\n"
-              << "  --packet-size <bytes>     Size of data packets in bytes.\n"
-              << "  --num-packets <count>     Number of packets to send (0 for unlimited).\n"
-              << "  --interval-ms <ms>        Delay between sends in milliseconds.\n"
-              << "  -h, --help                Display this help message and exit.\n";
+              << "  --config <path>           Path to a JSON configuration file. Command-line options will override file settings.\n"
+              << "  --target <ip_address>     Target IP address for the client (e.g., 192.168.1.100).\n"
+              << "  --port <port_number>      Port number for the connection (e.g., 5201).\n"
+              << "  --packet-size <bytes>     Size of data packets in bytes (includes header).\n"
+              << "  --num-packets <count>     Number of packets to send (0 for unlimited until interrupted).\n"
+              << "  --interval-ms <ms>        Delay between sending packets in milliseconds (0 for continuous send).\n"
+              << "  -h, --help                Display this help message and exit.\n\n"
+              << "UNDERSTANDING THE FINAL REPORT:\n"
+              << "  The report is split into two main sections:\n"
+              << "  1. Local Stats: This machine's perspective.\n"
+              << "     - If CLIENT: Shows how much data was SENT.\n"
+              << "     - If SERVER: Shows how much data was RECEIVED.\n"
+              << "  2. Remote Stats: The other machine's perspective, as reported by it.\n"
+              << "     - If CLIENT: Shows the SERVER's stats (how much it RECEIVED).\n"
+              << "     - If SERVER: Shows the CLIENT's stats (how much it SENT).\n\n"
+              << "  Key Metrics:\n"
+              << "  - Total Bytes: Total bytes transferred, including packet headers.\n"
+              << "  - Total Packets: Total number of packets transferred.\n"
+              << "  - Duration (s): The total time taken for the data transfer phase of the test.\n"
+              << "  - Throughput (Mbps): The calculated data transfer rate in Megabits per second.\n"
+              << "                       Formula: (Total Bytes * 8) / (Duration * 1,000,000)\n"
+              << "  - Checksum/Sequence Errors: Indicate potential packet corruption or loss during transit.\n";
 }
+

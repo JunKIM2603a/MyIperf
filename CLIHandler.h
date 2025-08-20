@@ -29,6 +29,11 @@ public:
      */
     void run(int argc, char* argv[]);
 
+    /**
+     * @brief Prints the help message with usage instructions to the console.
+     */
+    static void printHelp();
+
 private:
     /**
      * @brief Parses the command-line arguments to create a configuration.
@@ -38,11 +43,6 @@ private:
      * @throws std::runtime_error if arguments are invalid or missing.
      */
     Config parseArgs(int argc, char* argv[]);
-
-    /**
-     * @brief Prints the help message with usage instructions to the console.
-     */
-    void printHelp() const;
 
     // A reference to the TestController to manage the test.
     TestController& testController;

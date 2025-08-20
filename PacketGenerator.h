@@ -43,12 +43,10 @@ public:
     // --- Public Getters for Statistics ---
 
     /**
-     * @brief Gets the total number of bytes sent so far.
-     * @return The total bytes sent. This is thread-safe.
+     * @brief Retrieves the current generator statistics.
+     * @return A TestStats struct containing the latest statistics. This method is thread-safe.
      */
-    long long getTotalBytesSent() const { return totalBytesSent.load(); }
-    long long getTotalPacketsSent() const { return totalPacketsSent.load(); }
-    double getTestDuration() const;
+    TestStats getStats() const;
 
 private:
     // Private methods for internal operation

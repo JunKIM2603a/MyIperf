@@ -10,22 +10,6 @@
 #include <mutex>
 
 /**
- * @struct ReceiverStats
- * @brief Holds statistics related to the packet receiving process.
- */
-struct ReceiverStats {
-    long long totalBytesReceived;       // Total bytes received from the network.
-    std::chrono::duration<double> duration; // Time elapsed since the receiver started.
-    double throughputMbps;              // Calculated throughput in Megabits per second.
-    long long totalPacketsReceived;     // Total number of valid packets processed.
-    long long failedChecksumCount;      // Number of packets that failed checksum validation.
-    long long sequenceErrorCount;       // Number of packets received out of sequence.
-
-    // Default constructor to initialize all stats to zero.
-    ReceiverStats() : totalBytesReceived(0), duration(0.0), throughputMbps(0.0), totalPacketsReceived(0), failedChecksumCount(0), sequenceErrorCount(0) {}
-};
-
-/**
  * @brief Defines a callback function type that is invoked when a complete and valid packet is received.
  * @param header The header of the received packet.
  * @param payload The payload data of the received packet.
@@ -64,9 +48,15 @@ public:
 
     /**
      * @brief Retrieves the current receiver statistics.
-     * @return A ReceiverStats struct containing the latest statistics. This method is thread-safe.
+     * @return A TestStats struct containing the latest statistics. This method is thread-safe.
      */
-    ReceiverStats getStats() const;
+    TestStats getStats() const;
+
+    /**
+     * @brief Resets all statistical counters to zero.
+     * This is useful for clearing stats from a previous run without re-creating the object.
+     */
+    void resetStats();
 
 private:
     // Private methods for internal operation

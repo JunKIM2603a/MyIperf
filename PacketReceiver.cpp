@@ -50,25 +50,33 @@ void PacketReceiver::stop() {
     Logger::log("Info: PacketReceiver stopped.");
 }
 
-/**
- * @brief Retrieves the current statistics of the receiver.
- * @return A `ReceiverStats` struct containing performance metrics.
- */
-ReceiverStats PacketReceiver::getStats() const {
+TestStats PacketReceiver::getStats() const {
     std::lock_guard<std::mutex> lock(statsMutex); // Lock to ensure thread-safe access to stats.
-    ReceiverStats stats;
+    TestStats stats;
     stats.totalBytesReceived = currentBytesReceived;
-    stats.duration = std::chrono::high_resolution_clock::now() - startTime;
+    stats.duration = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
     
-    // Calculate throughput in Mbps using std::chrono durations safely
-    double duration_seconds = std::chrono::duration<double>(stats.duration).count();
+    // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
+    double duration_seconds = stats.duration;
     if (duration_seconds > 0) {
         stats.throughputMbps = (static_cast<double>(stats.totalBytesReceived) * 8.0) / duration_seconds / 1'000'000.0;
     }
     stats.totalPacketsReceived = m_totalPacketsReceived.load();
     stats.failedChecksumCount = m_failedChecksumCount.load();
     stats.sequenceErrorCount = m_sequenceErrorCount.load();
+    // Sent stats are not applicable for receiver, so they remain 0 (default initialized)
     return stats;
+}
+
+void PacketReceiver::resetStats() {
+    std::lock_guard<std::mutex> lock(statsMutex);
+    currentBytesReceived = 0;
+    m_totalPacketsReceived = 0;
+    m_failedChecksumCount = 0;
+    m_sequenceErrorCount = 0;
+    expectedPacketCounter = 0;
+    startTime = std::chrono::high_resolution_clock::now();
+    Logger::log("Info: PacketReceiver statistics have been reset.");
 }
 
 /**
@@ -168,8 +176,11 @@ void PacketReceiver::processBuffer() {
             }
             // Safely update stats under a lock.
             std::lock_guard<std::mutex> lock(statsMutex);
-            currentBytesReceived += totalPacketSize;
-            m_totalPacketsReceived++;
+            // Only count data packets for total bytes and packets received
+            if (header->messageType == MessageType::DATA_PACKET) {
+                currentBytesReceived += totalPacketSize;
+                m_totalPacketsReceived++;
+            }
             // Sequence checking should only apply to data packets.
             if (header->messageType == MessageType::DATA_PACKET) {
                 if (header->packetCounter != expectedPacketCounter) {
@@ -190,3 +201,4 @@ void PacketReceiver::processBuffer() {
         m_receiveBuffer.erase(m_receiveBuffer.begin(), m_receiveBuffer.begin() + totalPacketSize);
     }
 }
+
