@@ -162,12 +162,19 @@ void LinuxAsyncNetworkInterface::asyncAccept(AcceptCallback callback) {
 void LinuxAsyncNetworkInterface::asyncSend(const std::vector<char>& data, SendCallback callback) {
     if (clientFd == -1) {
         Logger::log("Error: asyncSend called on an invalid socket.");
-        callback(0);
+        if (callback) callback(0);
         return;
     }
 
     std::lock_guard<std::mutex> lock(socketDataMutex);
-    auto& socketData = socketDataMap[clientFd];
+    auto it = socketDataMap.find(clientFd);
+    if (it == socketDataMap.end() || !it->second) {
+        Logger::log("Error: asyncSend called but no socket data found for clientFd: " + std::to_string(clientFd));
+        if (callback) callback(0);
+        return;
+    }
+
+    auto& socketData = it->second;
     socketData->sendData.insert(socketData->sendData.end(), data.begin(), data.end());
     socketData->sendCallback = callback;
 
@@ -183,12 +190,19 @@ void LinuxAsyncNetworkInterface::asyncSend(const std::vector<char>& data, SendCa
 void LinuxAsyncNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback callback) {
     if (clientFd == -1) {
         Logger::log("Error: asyncReceive called on an invalid socket.");
-        callback({}, 0);
+        if (callback) callback({}, 0);
         return;
     }
 
     std::lock_guard<std::mutex> lock(socketDataMutex);
-    auto& socketData = socketDataMap[clientFd];
+    auto it = socketDataMap.find(clientFd);
+    if (it == socketDataMap.end() || !it->second) {
+        Logger::log("Error: asyncReceive called but no socket data found for clientFd: " + std::to_string(clientFd));
+        if (callback) callback({}, 0);
+        return;
+    }
+
+    auto& socketData = it->second;
     socketData->recvCallback = callback;
     socketData->buffer.resize(bufferSize);
 
@@ -241,19 +255,8 @@ void LinuxAsyncNetworkInterface::addFdToEpoll(int fd, uint32_t events, SocketDat
 }
 
 /**
- * @brief Removes a file descriptor from the epoll set.
- * @param fd The file descriptor to remove.
- */
-void LinuxAsyncNetworkInterface::removeFdFromEpoll(int fd) {
-    if (epoll_ctl(epollFd, EPOLL_CTL_DEL, fd, NULL) == -1) {
-        Logger::log("Warning: epoll_ctl(DEL) failed for fd " + std::to_string(fd) + ": " + std::string(strerror(errno)));
-    }
-    std::lock_guard<std::mutex> lock(socketDataMutex);
-    socketDataMap.erase(fd);
-}
-
-/**
  * @brief The main worker thread function for processing epoll events.
+ * This is the core of the asynchronous logic for Linux.
  */
 void LinuxAsyncNetworkInterface::epollWorkerThread() {
     Logger::log("Info: Epoll worker thread starting.");
@@ -265,7 +268,7 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
         if (!running) break;
 
         if (numEvents == -1) {
-            if (errno == EINTR) continue; // Interrupted, safe to continue.
+            if (errno == EINTR) continue;
             Logger::log("Error: epoll_wait failed: " + std::string(strerror(errno)));
             break;
         }
@@ -274,22 +277,198 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
             SocketData* data = static_cast<SocketData*>(events[i].data.ptr);
             if (!data) continue;
 
-            if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-                Logger::log("Error: Epoll error or hang-up on fd: " + std::to_string(data->fd));
-                // Notify the application of the error.
-                if (data->recvCallback) data->recvCallback({}, 0);
-                if (data->sendCallback) data->sendCallback(0);
-                if (data->connectCallback) data->connectCallback(false);
-                if (data->acceptCallback) data->acceptCallback(false, "", 0);
-                removeFdFromEpoll(data->fd);
-                ::close(data->fd);
+            // --- Handle Listen Socket Events (Accept) ---
+            if (data->fd == listenFd) {
+                if (events[i].events & EPOLLIN) {
+                    sockaddr_in clientAddr;
+                    socklen_t clientAddrLen = sizeof(clientAddr);
+                    while (true) {
+                        int newClientFd = accept(listenFd, (struct sockaddr*)&clientAddr, &clientAddrLen);
+                        if (newClientFd == -1) {
+                            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                                Logger::log("Error: accept() failed: " + std::string(strerror(errno)));
+                            }
+                            break; // No more pending connections
+                        }
+
+                        setNonBlocking(newClientFd);
+                        char clientIp[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, INET_ADDRSTRLEN);
+                        int clientPort = ntohs(clientAddr.sin_port);
+
+                        this->clientFd = newClientFd;
+
+                        auto newClientData = std::make_unique<SocketData>();
+                        newClientData->fd = newClientFd;
+                        newClientData->operationType = LinuxOperationType::Recv;
+
+                        addFdToEpoll(newClientFd, EPOLLIN | EPOLLET, newClientData.get());
+
+                        AcceptCallback acceptCb;
+                        {
+                            std::lock_guard<std::mutex> lock(socketDataMutex);
+                            socketDataMap[newClientFd] = std::move(newClientData);
+                            if (socketDataMap.count(listenFd)) {
+                                acceptCb = socketDataMap[listenFd]->acceptCallback;
+                            }
+                        }
+
+                        if (acceptCb) {
+                            Logger::log("Info: Client connection accepted from " + std::string(clientIp) + ":" + std::to_string(clientPort));
+                            acceptCb(true, clientIp, clientPort);
+                        }
+                    }
+                }
                 continue;
             }
 
-            // Handle different event types based on the operation stored in SocketData.
-            // This part needs to be carefully implemented to handle state transitions correctly.
+            // --- Handle Client Socket Events ---
+            std::unique_lock<std::mutex> lock(socketDataMutex);
+            if (socketDataMap.find(data->fd) == socketDataMap.end()) {
+                lock.unlock();
+                continue; // Socket data was removed by another operation, skip.
+            }
+
+            // --- Error Handling ---
+            if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+                Logger::log("Error: Epoll error or hang-up on fd: " + std::to_string(data->fd));
+                if (data->connectCallback) data->connectCallback(false);
+                if (data->recvCallback) data->recvCallback({}, 0);
+                if (data->sendCallback) data->sendCallback(0);
+
+                epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
+                ::close(data->fd);
+                socketDataMap.erase(data->fd);
+                lock.unlock();
+                continue;
+            }
+
+            // --- Connection Completion ---
+            if (data->operationType == LinuxOperationType::Connect && (events[i].events & EPOLLOUT)) {
+                int result;
+                socklen_t result_len = sizeof(result);
+                if (getsockopt(data->fd, SOL_SOCKET, SO_ERROR, &result, &result_len) < 0 || result != 0) {
+                    Logger::log("Error: Async connect failed: " + std::string(strerror(result)));
+                    if (data->connectCallback) data->connectCallback(false);
+                    epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
+                    ::close(data->fd);
+                    socketDataMap.erase(data->fd);
+                } else {
+                    Logger::log("Info: Successfully connected to the server.");
+                    data->operationType = LinuxOperationType::Recv;
+                    addFdToEpoll(data->fd, EPOLLIN | EPOLLET, data);
+                    if (data->connectCallback) data->connectCallback(true);
+                }
+                continue;
+            }
+
+            // --- Data Sending ---
+            if (events[i].events & EPOLLOUT) {
+                if (!data->sendData.empty()) {
+                    ssize_t bytesSent = ::send(data->fd, data->sendData.data(), data->sendData.size(), 0);
+                    if (bytesSent > 0) {
+                        data->sendData.erase(data->sendData.begin(), data->sendData.begin() + bytesSent);
+                        if (data->sendCallback) data->sendCallback(bytesSent);
+                        data->sendCallback = nullptr;
+                    }
+                    if (data->sendData.empty()) {
+                        addFdToEpoll(data->fd, EPOLLIN | EPOLLET, data); // Stop listening for write
+                    }
+                }
+            }
+
+            // --- Data Receiving ---
+            if (events[i].events & EPOLLIN) {
+                std::vector<char> receivedData;
+                char buffer[4096];
+                while (true) {
+                    ssize_t bytesReceived = ::recv(data->fd, buffer, sizeof(buffer), 0);
+                    if (bytesReceived > 0) {
+                        receivedData.insert(receivedData.end(), buffer, buffer + bytesReceived);
+                    } else if (bytesReceived == 0) {
+                        Logger::log("Info: Connection closed by peer on fd: " + std::to_string(data->fd));
+                        if (data->recvCallback) data->recvCallback({}, 0);
+                        epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
+                        ::close(data->fd);
+                        socketDataMap.erase(data->fd);
+                        break;
+                    } else {
+                        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                            Logger::log("Error: recv() failed for fd " + std::to_string(data->fd) + ": " + std::string(strerror(errno)));
+                            if (data->recvCallback) data->recvCallback({}, 0);
+                            epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
+                            ::close(data->fd);
+                            socketDataMap.erase(data->fd);
+                        } else if (data->recvCallback && !receivedData.empty()) {
+                            data->recvCallback(receivedData, receivedData.size());
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
     Logger::log("Info: Epoll worker thread stopping.");
 }
+
+/**
+ * @brief Sets up a listening socket for the server.
+ * @param ip The IP address to bind to.
+ * @param port The port to listen on.
+ * @return True on success, false on failure.
+ */
+bool LinuxAsyncNetworkInterface::setupListeningSocket(const std::string& ip, int port) {
+    listenFd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenFd == -1) {
+        Logger::log("Error: socket() for listening failed: " + std::string(strerror(errno)));
+        return false;
+    }
+
+    if (!setNonBlocking(listenFd)) {
+        ::close(listenFd);
+        listenFd = -1;
+        return false;
+    }
+
+    int reuse = 1;
+    if (setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        Logger::log("Error: setsockopt(SO_REUSEADDR) failed: " + std::string(strerror(errno)));
+        ::close(listenFd);
+        listenFd = -1;
+        return false;
+    }
+
+    sockaddr_in serverAddr;
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    inet_pton(AF_INET, ip.c_str(), &serverAddr.sin_addr);
+    serverAddr.sin_port = htons(port);
+
+    if (bind(listenFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {
+        Logger::log("Error: bind() for listening failed: " + std::string(strerror(errno)));
+        ::close(listenFd);
+        listenFd = -1;
+        return false;
+    }
+
+    if (listen(listenFd, SOMAXCONN) == -1) {
+        Logger::log("Error: listen() failed: " + std::string(strerror(errno)));
+        ::close(listenFd);
+        listenFd = -1;
+        return false;
+    }
+
+    auto listenData = std::make_unique<SocketData>();
+    listenData->fd = listenFd;
+    listenData->operationType = LinuxOperationType::Accept;
+
+    addFdToEpoll(listenFd, EPOLLIN | EPOLLET, listenData.get());
+
+    std::lock_guard<std::mutex> lock(socketDataMutex);
+    socketDataMap[listenFd] = std::move(listenData);
+
+    Logger::log("Info: Listening socket set up on " + ip + ":" + std::to_string(port));
+    return true;
+}
+
 #endif // !_WIN32

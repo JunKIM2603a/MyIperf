@@ -67,6 +67,8 @@ public:
     int blockingSend(const std::vector<char>& data) override;
     std::vector<char> blockingReceive(size_t bufferSize) override;
 
+    bool setupListeningSocket(const std::string& ip, int port);
+
 private:
     // --- Epoll and Socket Management ---
     int listenFd;       // Listening file descriptor for server mode.
@@ -91,11 +93,6 @@ private:
      */
     void addFdToEpoll(int fd, uint32_t events, SocketData* data);
 
-    /**
-     * @brief Removes a file descriptor from the epoll set.
-     * @param fd The file descriptor to remove.
-     */
-    void removeFdFromEpoll(int fd);
 };
 
 #endif // !_WIN32
