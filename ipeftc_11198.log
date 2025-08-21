@@ -1,0 +1,11 @@
+[2025-08-21 13:08:22] Info: IPEFTC (IPerf Test Client/Server) application starting.
+[2025-08-21 13:08:22] Info: Starting test in SERVER mode.
+[2025-08-21 13:08:22] Info: Epoll network interface initialized.
+[2025-08-21 13:08:22] Info: Epoll worker thread starting.
+[2025-08-21 13:08:22] Debug: Attempting to add/mod fd 5 to epoll with events 0x80002001
+[2025-08-21 13:08:22] Debug: epoll_ctl(ADD) successful for fd 5
+[2025-08-21 13:08:22] Info: Listening socket set up on 127.0.0.1:5201
+[2025-08-21 13:08:22] Info: Transitioning to state: ACCEPTING
+[2025-08-21 13:08:22] Info: Server waiting for a client connection on 127.0.0.1:5201
+[2025-08-21 13:08:22] [transitionTo_nolock:167] State::ACCEPTING
+[2025-08-21 13:08:22] Info: Server is running. Waiting for the test to complete...

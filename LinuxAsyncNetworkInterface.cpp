@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h> // For strerror
+#include <sstream> // For std::stringstream
 
 /**
  * @brief Helper function to set a socket to non-blocking mode.
@@ -141,9 +142,6 @@ void LinuxAsyncNetworkInterface::asyncConnect(const std::string& ip, int port, C
  * @param callback The function to call upon completion.
  */
 void LinuxAsyncNetworkInterface::asyncAccept(AcceptCallback callback) {
-    // In this design, accept is not a one-shot call but is handled continuously
-    // by the epoll worker when the listen socket has an EPOLLIN event.
-    // We store the callback in the listen socket's data.
     if (listenFd != -1) {
         std::lock_guard<std::mutex> lock(socketDataMutex);
         if (socketDataMap.count(listenFd)) {
@@ -178,7 +176,6 @@ void LinuxAsyncNetworkInterface::asyncSend(const std::vector<char>& data, SendCa
     socketData->sendData.insert(socketData->sendData.end(), data.begin(), data.end());
     socketData->sendCallback = callback;
 
-    // Ensure the socket is monitored for writability.
     addFdToEpoll(clientFd, EPOLLIN | EPOLLOUT | EPOLLET, socketData.get());
 }
 
@@ -206,7 +203,6 @@ void LinuxAsyncNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback ca
     socketData->recvCallback = callback;
     socketData->buffer.resize(bufferSize);
 
-    // Ensure the socket is monitored for readability.
     addFdToEpoll(clientFd, EPOLLIN | EPOLLET, socketData.get());
 }
 
@@ -241,16 +237,25 @@ std::vector<char> LinuxAsyncNetworkInterface::blockingReceive(size_t bufferSize)
  */
 void LinuxAsyncNetworkInterface::addFdToEpoll(int fd, uint32_t events, SocketData* data) {
     epoll_event event;
-    event.events = events;
+    event.events = events | EPOLLRDHUP;
     event.data.ptr = data;
+
+    std::stringstream ss;
+    ss << "Debug: Attempting to add/mod fd " << fd << " to epoll with events 0x" << std::hex << event.events;
+    Logger::log(ss.str());
+
     if (epoll_ctl(epollFd, EPOLL_CTL_ADD, fd, &event) == -1) {
         if (errno == EEXIST) { // If it already exists, modify it.
             if (epoll_ctl(epollFd, EPOLL_CTL_MOD, fd, &event) == -1) {
                 Logger::log("Error: epoll_ctl(MOD) failed for fd " + std::to_string(fd) + ": " + std::string(strerror(errno)));
+            } else {
+                Logger::log("Debug: epoll_ctl(MOD) successful for fd " + std::to_string(fd));
             }
         } else {
             Logger::log("Error: epoll_ctl(ADD) failed for fd " + std::to_string(fd) + ": " + std::string(strerror(errno)));
         }
+    } else {
+        Logger::log("Debug: epoll_ctl(ADD) successful for fd " + std::to_string(fd));
     }
 }
 
@@ -267,6 +272,12 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
         int numEvents = epoll_wait(epollFd, events, MAX_EVENTS, -1);
         if (!running) break;
 
+        if (numEvents > 0) {
+            std::stringstream ss;
+            ss << "Debug: epoll_wait returned " << numEvents << " events.";
+            Logger::log(ss.str());
+        }
+
         if (numEvents == -1) {
             if (errno == EINTR) continue;
             Logger::log("Error: epoll_wait failed: " + std::string(strerror(errno)));
@@ -276,6 +287,10 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
         for (int i = 0; i < numEvents; ++i) {
             SocketData* data = static_cast<SocketData*>(events[i].data.ptr);
             if (!data) continue;
+
+            std::stringstream ss;
+            ss << "Debug: Processing event for fd " << data->fd << ", events 0x" << std::hex << events[i].events;
+            Logger::log(ss.str());
 
             // --- Handle Listen Socket Events (Accept) ---
             if (data->fd == listenFd) {
@@ -330,6 +345,15 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
             }
 
             // --- Error Handling ---
+            if (events[i].events & EPOLLRDHUP) {
+                Logger::log("Info: Connection closed by peer (EPOLLRDHUP) on fd: " + std::to_string(data->fd));
+                if (data->recvCallback) data->recvCallback({}, 0); // Signal disconnection
+                epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
+                ::close(data->fd);
+                socketDataMap.erase(data->fd);
+                lock.unlock();
+                continue;
+            }
             if (events[i].events & (EPOLLERR | EPOLLHUP)) {
                 Logger::log("Error: Epoll error or hang-up on fd: " + std::to_string(data->fd));
                 if (data->connectCallback) data->connectCallback(false);
@@ -386,11 +410,11 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                     if (bytesReceived > 0) {
                         receivedData.insert(receivedData.end(), buffer, buffer + bytesReceived);
                     } else if (bytesReceived == 0) {
-                        Logger::log("Info: Connection closed by peer on fd: " + std::to_string(data->fd));
-                        if (data->recvCallback) data->recvCallback({}, 0);
+                        Logger::log("Info: Connection closed by peer on fd: " + std::to_string(data->fd) + ". Notifying upper layer.");
+                        if (data->recvCallback) {
+                            data->recvCallback({}, 0);
+                        }
                         epoll_ctl(epollFd, EPOLL_CTL_DEL, data->fd, NULL);
-                        ::close(data->fd);
-                        socketDataMap.erase(data->fd);
                         break;
                     } else {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -441,7 +465,7 @@ bool LinuxAsyncNetworkInterface::setupListeningSocket(const std::string& ip, int
     sockaddr_in serverAddr;
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
-    inet_pton(AF_INET, ip.c_str(), &serverAddr.sin_addr);
+    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     serverAddr.sin_port = htons(port);
 
     if (bind(listenFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == -1) {

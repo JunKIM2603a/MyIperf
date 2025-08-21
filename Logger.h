@@ -115,7 +115,7 @@ private:
     static std::deque<std::string> messageQueue; // Queue to hold pending log messages.
     static std::thread workerThread;            // The dedicated thread for writing logs.
     static std::atomic<bool> running;           // Flag to control the logger's running state.
-    static const std::string Logger::getTimeNow(); // Get System time
+    static const std::string getTimeNow(); // Get System time
 
     // Optional file logging
     static std::ofstream logStream;             // File stream for persistent logs.

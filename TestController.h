@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "Config.h"
+#include "config.h"
 #include "NetworkInterface.h"
 #include "PacketGenerator.h"
 #include "PacketReceiver.h"

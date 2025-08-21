@@ -94,6 +94,13 @@ void TestController::startTest(const Config& config) {
             transitionTo(State::ERRORED);
             return;
         }
+#else
+        LinuxAsyncNetworkInterface* linuxInterface = static_cast<LinuxAsyncNetworkInterface*>(networkInterface.get());
+        if (!linuxInterface->setupListeningSocket(config.getTargetIP(), config.getPort())) {
+            Logger::log("Fatal: Failed to set up listening socket for Linux.");
+            transitionTo(State::ERRORED);
+            return;
+        }
 #endif
         transitionTo(State::ACCEPTING);
     } else { // Client mode
@@ -366,9 +373,15 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
                 }
 
-                networkInterface->asyncSend(packet, [this](size_t){
-                    Logger::log("Info: Server sent STATS_ACK with its stats.");
-                    transitionTo(State::FINISHED);
+                networkInterface->asyncSend(packet, [this](size_t bytesSent){
+                    if (bytesSent > 0) {
+                        Logger::log("Info: Server sent STATS_ACK with its stats. Waiting for client to close connection.");
+                        // Do not transition state here. The server's read-completion handler
+                        // will detect the client closing the connection and transition to FINISHED.
+                    } else {
+                        Logger::log("Error: Server failed to send STATS_ACK.");
+                        transitionTo(State::ERRORED);
+                    }
                 });
                 break;
             }

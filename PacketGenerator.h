@@ -2,7 +2,7 @@
 
 #include "NetworkInterface.h"
 #include "Protocol.h"
-#include "Config.h"
+#include "config.h"
 #include <chrono>
 #include <vector>
 #include <atomic>
