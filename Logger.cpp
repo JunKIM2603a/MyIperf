@@ -1,4 +1,4 @@
-#include "Logger.h"
+﻿#include "Logger.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -23,6 +23,16 @@ std::atomic<bool> Logger::running(false);
 std::ofstream Logger::logStream;
 std::atomic<bool> Logger::saveToFile(false);
 const std::string Logger::logDirectory = "Log";
+
+#ifdef _WIN32
+HANDLE Logger::hPipe = INVALID_HANDLE_VALUE;
+std::atomic<bool> Logger::pipeConnected(false);
+std::string Logger::pipeName = ""; // Initialized as empty
+std::thread Logger::pipeThread;
+#else
+// _WIN32가 아닌 환경을 위한 더미 변수
+std::thread Logger::pipeThread;
+#endif
 
 // wait function for debug step
 void DebugPause(const std::string& message) {
@@ -56,32 +66,99 @@ void Logger::manageLogRotation(const std::string& mode) {
     }
 }
 
-void Logger::start(bool enableFileLogging, const std::string& mode) {
+#ifdef _WIN32
+void Logger::pipeWorker() {
+    std::cerr << "Debug: pipeWorker started.\n";
+    while (running) {
+        std::cerr << "Debug: pipeWorker loop - top.\n";
+        if (pipeName.empty()) { // Don't start until pipe name is set
+            std::cerr << "Debug: pipeWorker - pipeName is empty, waiting.\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        std::cerr << "Debug: pipeWorker - Creating named pipe.\n";
+        hPipe = CreateNamedPipe(
+            pipeName.c_str(),
+            PIPE_ACCESS_OUTBOUND,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+            1, // Only one instance
+            4096, // Output buffer size
+            4096, // Input buffer size
+            0,    // Default timeout
+            NULL);
+
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            logError("Could not create named pipe. Error: " + std::to_string(GetLastError()));
+            std::cerr << "Debug: pipeWorker - CreateNamedPipe failed, sleeping.\n";
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            continue;
+        }
+
+        Logger::log("Info: Named pipe '" + pipeName + "' created. Waiting for a client to connect...");
+        std::cerr << "Debug: pipeWorker - Calling ConnectNamedPipe.\n";
+        bool connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        std::cerr << "Debug: pipeWorker - ConnectNamedPipe returned. Connected: " + std::to_string(connected) + "\n";
+
+        if (connected && running) {
+            Logger::log("Info: Client connected to named pipe '" + pipeName + "'.");
+            pipeConnected = true;
+            while (pipeConnected && running) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            std::cerr << "Debug: pipeWorker - Inner connected loop exited.\n";
+        } else {
+            pipeConnected = false;
+            std::cerr << "Debug: pipeWorker - Not connected or running is false.\n";
+        }
+
+        if(hPipe != INVALID_HANDLE_VALUE) {
+            std::cerr << "Debug: pipeWorker - Disconnecting and closing pipe handle.\n";
+            DisconnectNamedPipe(hPipe);
+            CloseHandle(hPipe);
+            hPipe = INVALID_HANDLE_VALUE;
+        }
+
+        if(pipeConnected) {
+             Logger::log("Info: Client disconnected from named pipe '" + pipeName + "'.");
+        }
+        pipeConnected = false;
+        std::cerr << "Debug: pipeWorker loop - bottom.\n";
+    }
+    std::cerr << "Debug: pipeWorker finished.\n";
+}
+#endif
+
+void Logger::start(const Config& config) {
+    std::cerr << "DEBUG: Entering Logger::start()\n";
     running = true;
-    saveToFile = enableFileLogging;
+
+    const std::string mode = config.getMode() == Config::TestMode::CLIENT ? "CLIENT" : "SERVER";
 
 #ifdef _WIN32
+    pipeName = "\\\\.\\pipe\\myiperflog_" + mode + "_" + config.getTargetIP() + "_" + std::to_string(config.getPort());
+    // Replace invalid characters for pipe names, like colons in IPv6
+    std::replace(pipeName.begin(), pipeName.end(), ':', '_'); 
+
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hOut != INVALID_HANDLE_VALUE) {
         DWORD dmode = 0;
         if (GetConsoleMode(hOut, &dmode)) {
-            dmode |= 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            dmode |= 0x0004;
             SetConsoleMode(hOut, dmode);
         }
     }
 #endif
 
-    if (saveToFile) {
+    if (config.getSaveLogs()) {
+        saveToFile = true;
         if (!std::filesystem::exists(logDirectory)) {
             std::filesystem::create_directory(logDirectory);
         }
-
         manageLogRotation(mode);
-
         auto now = std::chrono::system_clock::now();
         std::time_t now_c = std::chrono::system_clock::to_time_t(now);
         std::tm local_tm = *std::localtime(&now_c);
-
         std::ostringstream name;
         name << logDirectory << "/ipeftc_" << mode << "_"
              << std::put_time(&local_tm, "%Y%m%d_%H%M%S") << "_";
@@ -91,28 +168,72 @@ void Logger::start(bool enableFileLogging, const std::string& mode) {
         name << getpid();
 #endif
         name << ".log";
-
-        try {
-            logStream.open(name.str(), std::ios::out | std::ios::app);
-        } catch (...) {
-            log("Error: Could not open log file.");
+        logStream.open(name.str(), std::ios::out | std::ios::app);
+        if (!logStream.is_open()) {
+            logError("Failed to open log file: " + name.str());
+            saveToFile = false; // Disable file logging if open failed
         }
     }
 
     workerThread = std::thread(logWorker);
+#ifdef _WIN32
+    pipeThread = std::thread(pipeWorker);
+#endif
 }
 
 void Logger::stop() {
+    Logger::log("Debug: Logger::stop() called.");
     running = false;
     cv.notify_all();
+
+    // Give logWorker a chance to process remaining messages and exit its loop
+    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // ADDED DELAY
+
+#ifdef _WIN32
+    Logger::log("Debug: Logger::stop() - Attempting to unblock pipeThread.");
+    if (!pipeName.empty()) {
+        // Create a dummy client to unblock ConnectNamedPipe
+        HANDLE hDummyPipe = CreateFile(
+            pipeName.c_str(),
+            GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL);
+        if (hDummyPipe != INVALID_HANDLE_VALUE) {
+            CloseHandle(hDummyPipe);
+            Logger::log("Debug: Logger::stop() - Dummy pipe client created and closed.");
+        } else {
+            Logger::log("Warning: Logger::stop() - Failed to create dummy pipe client. Error: " + std::to_string(GetLastError()));
+        }
+    }
+#endif
+
+    // workerThread를 먼저 join하여 모든 로그 처리를 완료하도록 합니다.
+    Logger::log("Debug: Logger::stop() - Joining workerThread.");
     if (workerThread.joinable()) {
         workerThread.join();
     }
+    Logger::log("Debug: Logger::stop() - workerThread joined.");
+
+#ifdef _WIN32
+    // Windows 환경에서만 pipeThread를 join합니다.
+    Logger::log("Debug: Logger::stop() - Joining pipeThread.");
+    if (pipeThread.joinable()) {
+        pipeThread.join();
+    }
+    Logger::log("Debug: Logger::stop() - pipeThread joined.");
+#endif
+
     if (saveToFile && logStream.is_open()) {
+        Logger::log("Debug: Logger::stop() - Flushing and closing logStream.");
         logStream.flush();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         logStream.close();
+        Logger::log("Debug: Logger::stop() - logStream closed.");
     }
+    Logger::log("Debug: Logger::stop() finished.");
 }
 
 void Logger::log(const std::string& message) {
@@ -124,6 +245,59 @@ void Logger::log(const std::string& message) {
     cv.notify_one();
 }
 
+void Logger::logWorker() {
+    std::cerr << "Debug: logWorker started.\n";
+    while (true) {
+        std::cerr << "Debug: logWorker loop - top.\n";
+        std::deque<std::string> writeQueue;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            cv.wait(lock, [] { return !messageQueue.empty() || !running; });
+            if (!running && messageQueue.empty()) {
+                // Logger::log("Debug: logWorker - Exiting loop (not running and queue empty)."); // REMOVED
+                break;
+            }
+            writeQueue.swap(messageQueue);
+            std::cerr << "Debug: logWorker - Message queue swapped. Count: " + std::to_string(writeQueue.size()) + "\n";
+        }
+
+        for (const auto& msg : writeQueue) {
+            auto now = std::chrono::system_clock::now();
+            std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+            std::ostringstream oss;
+            oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] " << msg;
+            const std::string out = oss.str();
+
+            const std::string colored = [&]() {
+                if (msg.rfind("Error:", 0) == 0) return std::string("\x1b[31m") + out + "\x1b[0m";
+                if (msg.rfind("Warning:", 0) == 0) return std::string("\x1b[33m") + out + "\x1b[0m";
+                if (msg.rfind("Info:", 0) == 0) return std::string("\x1b[32m") + out + "\x1b[0m";
+                if (msg.rfind("Debug:", 0) == 0) return std::string("\x1b[36m") + out + "\x1b[0m";
+                return out;
+            }() ;
+            
+            std::cout << colored << std::endl;
+
+            if (saveToFile && logStream.is_open()) {
+                logStream << out << std::endl;
+                logStream.flush();
+            }
+#ifdef _WIN32
+            if (pipeConnected) {
+                DWORD bytesWritten = 0;
+                bool success = WriteFile(hPipe, out.c_str(), out.length(), &bytesWritten, NULL);
+                if (!success) {
+                    std::cerr << "Debug: logWorker - WriteFile to pipe failed. Error: " + std::to_string(GetLastError()) + "\n";
+                    pipeConnected = false;
+                }
+            }
+#endif
+        }
+        std::cerr << "Debug: logWorker loop - bottom.\n";
+    }
+    // Logger::log("Debug: logWorker finished."); // REMOVED
+}
+
 void Logger::writeFinalReport(const std::string& role,
                               const TestStats& localStats,
                               const TestStats& remoteStats) {
@@ -131,25 +305,25 @@ void Logger::writeFinalReport(const std::string& role,
 
     log("==== Final Report (" + role + ") ====");
     log("--- Local Stats (This machine's perspective) ---");
-    log("  Total Bytes Sent   : " + std::to_string(localStats.totalBytesSent) + " (Total bytes this machine attempted to send)");
-    log("  Total Packets Sent : " + std::to_string(localStats.totalPacketsSent) + " (Total packets this machine attempted to send)");
-    log("  Total Bytes Recv   : " + std::to_string(localStats.totalBytesReceived) + " (Total bytes this machine received, including headers)");
-    log("  Total Packets Recv : " + std::to_string(localStats.totalPacketsReceived) + " (Total data packets this machine received)");
-    log("  Checksum Errors    : " + std::to_string(localStats.failedChecksumCount) + " (Packets received by this machine with an invalid checksum)");
-    log("  Sequence Errors    : " + std::to_string(localStats.sequenceErrorCount) + " (Data packets received by this machine out of order)");
-    log("  Duration (s)       : " + std::to_string(localStats.duration) + " (The duration of the data transfer phase in seconds)");
-    log("  Throughput (Mbps)  : " + std::to_string(localStats.throughputMbps) + " (Calculated as: [Total Bytes * 8] / [Duration * 1,000,000])");
+    log("   Total Bytes Sent    : " + std::to_string(localStats.totalBytesSent) + " (Total bytes this machine attempted to send)");
+    log("   Total Packets Sent  : " + std::to_string(localStats.totalPacketsSent) + " (Total packets this machine attempted to send)");
+    log("   Total Bytes Recv    : " + std::to_string(localStats.totalBytesReceived) + " (Total bytes this machine received, including headers)");
+    log("   Total Packets Recv  : " + std::to_string(localStats.totalPacketsReceived) + " (Total data packets this machine received)");
+    log("   Checksum Errors     : " + std::to_string(localStats.failedChecksumCount) + " (Packets received by this machine with an invalid checksum)");
+    log("   Sequence Errors     : " + std::to_string(localStats.sequenceErrorCount) + " (Data packets received by this machine out of order)");
+    log("   Duration (s)        : " + std::to_string(localStats.duration) + " (The duration of the data transfer phase in seconds)");
+    log("   Throughput (Mbps)   : " + std::to_string(localStats.throughputMbps) + " (Calculated as: [Total Bytes * 8] / [Duration * 1,000,000])");
 
     if (role == "CLIENT" || role == "SERVER") { 
         log("--- Remote Stats (Remote machine's perspective) ---");
-        log("  Total Bytes Sent   : " + std::to_string(remoteStats.totalBytesSent) + " (Total bytes the remote machine sent)");
-        log("  Total Packets Sent : " + std::to_string(remoteStats.totalPacketsSent) + " (Total packets the remote machine sent)");
-        log("  Total Bytes Recv   : " + std::to_string(remoteStats.totalBytesReceived) + " (Total bytes the remote machine received)");
-        log("  Total Packets Recv : " + std::to_string(remoteStats.totalPacketsReceived) + " (Total data packets the remote machine received)");
-        log("  Checksum Errors    : " + std::to_string(remoteStats.failedChecksumCount) + " (Packets received by the remote machine with an invalid checksum)");
-        log("  Sequence Errors    : " + std::to_string(remoteStats.sequenceErrorCount) + " (Data packets received by the remote machine out of order)");
-        log("  Duration (s)       : " + std::to_string(remoteStats.duration) + " (The remote machine's measurement of the test duration)");
-        log("  Throughput (Mbps)  : " + std::to_string(remoteStats.throughputMbps) + " (The remote machine's calculated throughput)");
+        log("   Total Bytes Sent    : " + std::to_string(remoteStats.totalBytesSent) + " (Total bytes the remote machine sent)");
+        log("   Total Packets Sent  : " + std::to_string(remoteStats.totalPacketsSent) + " (Total packets the remote machine sent)");
+        log("   Total Bytes Recv    : " + std::to_string(remoteStats.totalBytesReceived) + " (Total bytes the remote machine received)");
+        log("   Total Packets Recv  : " + std::to_string(remoteStats.totalPacketsReceived) + " (Total data packets the remote machine received)");
+        log("   Checksum Errors     : " + std::to_string(remoteStats.failedChecksumCount) + " (Packets received by the remote machine with an invalid checksum)");
+        log("   Sequence Errors     : " + std::to_string(remoteStats.sequenceErrorCount) + " (Data packets received by the remote machine out of order)");
+        log("   Duration (s)        : " + std::to_string(remoteStats.duration) + " (The remote machine's measurement of the test duration)");
+        log("   Throughput (Mbps)   : " + std::to_string(remoteStats.throughputMbps) + " (The remote machine's calculated throughput)");
     }
     log("================================");
 }
@@ -160,39 +334,4 @@ const std::string Logger::getTimeNow() {
     std::ostringstream oss;
     oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] ";
     return oss.str();
-}
-
-void Logger::logWorker() {
-    while (true) {
-        std::deque<std::string> writeQueue;
-        {
-            std::unique_lock<std::mutex> lock(queueMutex);
-            cv.wait(lock, [] { return !messageQueue.empty() || !running; });
-
-            if (!running && messageQueue.empty()) {
-                break;
-            }
-            writeQueue.swap(messageQueue);
-        }
-
-        for (const auto& msg : writeQueue) {
-            auto now = std::chrono::system_clock::now();
-            std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-            std::ostringstream oss;
-            oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] " << msg;
-            const std::string out =  oss.str();
-            const std::string colored = [&]() {
-                if (msg.rfind("Error:", 0) == 0) return std::string("\x1b[31m") + out + "\x1b[0m";
-                if (msg.rfind("Warning:", 0) == 0) return std::string("\x1b[33m") + out + "\x1b[0m";
-                if (msg.rfind("Info:", 0) == 0) return std::string("\x1b[32m") + out + "\x1b[0m";
-                if (msg.rfind("Debug:", 0) == 0) return std::string("\x1b[36m") + out + "\x1b[0m";
-                return out;
-            }();
-            std::cout << colored << std::endl;
-            if (saveToFile && logStream.is_open()) {
-                logStream << out << std::endl;
-                logStream.flush();
-            }
-        }
-    }
 }

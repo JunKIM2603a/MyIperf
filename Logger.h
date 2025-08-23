@@ -12,7 +12,12 @@
 #include <vector>
 #include <filesystem>
 #include "Protocol.h"
+#include "Config.h"
 
+#ifdef _WIN32
+// Define HANDLE to be void* to avoid including <windows.h> in a header file.
+typedef void *HANDLE;
+#endif
 
 #include <cstdlib>  // std::abort
 #include <sstream>  // std::ostringstream
@@ -40,12 +45,12 @@ inline std::string string_format(const char* fmt, ...) {
     return std::string(buffer.data());
 }
 
-// 로그용 함수
+// function for Log
 inline void logError(const std::string& msg) {
     std::cerr << "[ERROR] " << msg << std::endl;
 }
 
-// 커스텀 Assert 함수
+// custom Assert function
 inline void assertLog(bool condition, const char* conditionStr, const char* file, int line, const char* func, const std::string& msg) {
     if (!condition) {
         std::ostringstream oss;
@@ -55,6 +60,7 @@ inline void assertLog(bool condition, const char* conditionStr, const char* file
             << "  File: "      << file << "\n"
             << "  Line: "      << line << "\n"
             << "  Function: "  << func << "\n";
+        std::cerr << oss.str(); // Print to stderr for debugging
         logError(oss.str());
         std::abort();
     }
@@ -65,72 +71,46 @@ inline void assertLog(bool condition, const char* conditionStr, const char* file
     assertLog(cond, #cond, __FILE__, __LINE__, __func__, string_format(fmt, ##__VA_ARGS__))
 
 
-
-
 /**
  * @class Logger
  * @brief A thread-safe, asynchronous logging utility.
  *
  * This static class provides a simple logging framework that queues messages
- * from multiple threads and writes them to the console via a dedicated worker thread.
- * This prevents log messages from different threads from interleaving and avoids
- * blocking application threads for I/O operations.
+ * from multiple threads and writes them to the console, a file, and a named pipe.
  */
 class Logger {
 public:
-    /**
-     * @brief Starts the logger service.
-     * This must be called before any logging is done.
-     * @param enableFileLogging If true, logs will be saved to a file.
-     * @param mode The mode of operation (e.g., "CLIENT" or "SERVER") to be included in the log file name.
-     */
-    static void start(bool enableFileLogging = false, const std::string& mode = "");
-
-    /**
-     * @brief Stops the logger service and cleans up resources.
-     */
+    static void start(const Config& config);
     static void stop();
-
-    /**
-     * @brief Queues a message to be logged.
-     * @param message The message string to log.
-     */
     static void log(const std::string& message);
-
-    /**
-     * @brief Logs formatted test statistics.
-     * @param throughputMbps The calculated throughput in Mbps.
-     * @param duration The test duration in seconds.
-     * @param totalBytes The total bytes transferred.
-     */
     static void writeStats(double throughputMbps, double duration, long long totalBytes);
-
     static void writeFinalReport(const std::string& role,
                                  const TestStats& localStats,
                                  const TestStats& remoteStats);
 
 private:
-    /**
-     * @brief The function executed by the worker thread to process the log queue.
-     */
     static void logWorker();
-
-    /**
-     * @brief Manages log file rotation, keeping only the most recent 10 logs for the current mode.
-     * @param mode The current operation mode (e.g., "CLIENT" or "SERVER").
-     */
     static void manageLogRotation(const std::string& mode);
 
-    // Static member variables for the logging framework
-    static std::mutex queueMutex;               // Mutex to protect the message queue.
-    static std::condition_variable cv;          // Condition variable to signal new messages.
-    static std::deque<std::string> messageQueue; // Queue to hold pending log messages.
-    static std::thread workerThread;            // The dedicated thread for writing logs.
-    static std::atomic<bool> running;           // Flag to control the logger's running state.
-    static const std::string getTimeNow();      // Get System time
+    // Logging framework members
+    static std::mutex queueMutex;
+    static std::condition_variable cv;
+    static std::deque<std::string> messageQueue;
+    static std::thread workerThread;
+    static std::atomic<bool> running;
+    static const std::string getTimeNow();
 
-    // Optional file logging
-    static std::ofstream logStream;             // File stream for persistent logs.
-    static std::atomic<bool> saveToFile;        // Controls whether logs are saved to a file.
-    static const std::string logDirectory;      // Directory to store log files.
+    // File logging members
+    static std::ofstream logStream;
+    static std::atomic<bool> saveToFile;
+    static const std::string logDirectory;
+
+#ifdef _WIN32
+    // Named pipe logging members
+    static void pipeWorker();
+    static std::thread pipeThread;
+    static HANDLE hPipe;
+    static std::atomic<bool> pipeConnected;
+    static std::string pipeName;
+#endif
 };

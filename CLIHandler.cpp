@@ -17,6 +17,8 @@ CLIHandler::CLIHandler(TestController& controller) : testController(controller) 
  * @param argv Argument values.
  */
 void CLIHandler::run(int argc, char* argv[]) {
+    std::cerr << "DEBUG: Entering CLIHandler::run()\n";
+
     // If no arguments are provided, display help and exit.
     if (argc < 2) {
         printHelp();
@@ -28,7 +30,7 @@ void CLIHandler::run(int argc, char* argv[]) {
         Config config = parseArgs(argc, argv);
 
         // Start the logger with the given configuration
-        Logger::start(config.getSaveLogs(), config.getMode() == Config::TestMode::CLIENT ? "CLIENT" : "SERVER");
+        Logger::start(config);
 
         // Start the test with the parsed configuration.
         testController.startTest(config);

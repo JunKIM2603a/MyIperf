@@ -45,15 +45,19 @@ const char* MessageTypeToString(MessageType type) {
  * Initializes network interface, generator, receiver, and the state timeout timer.
  */
 TestController::TestController() : currentState(State::IDLE), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
+    std::cerr << "DEBUG: Entering TestController::TestController()\n";
+    std::cerr << "DEBUG: TestController::TestController() - Before networkInterface creation.\n"; // NEW LOG
     // Select the appropriate network interface based on the operating system.
 #ifdef _WIN32
     networkInterface = std::make_unique<WinIOCPNetworkInterface>();
 #else
     networkInterface = std::make_unique<LinuxAsyncNetworkInterface>();
 #endif
+    std::cerr << "DEBUG: TestController::TestController() - After networkInterface creation.\n"; // NEW LOG
     // Initialize the core components.
     packetGenerator = std::make_unique<PacketGenerator>(networkInterface.get());
     packetReceiver = std::make_unique<PacketReceiver>(networkInterface.get());
+    std::cerr << "DEBUG: TestController::TestController() - Finished.\n"; // NEW LOG
 }
 
 /**
@@ -69,7 +73,7 @@ TestController::~TestController() {
  * @param config The configuration for the test.
  */
 void TestController::startTest(const Config& config) {
-    m_expectedDataPacketCounter = 0;
+    std::cerr << "DEBUG: Entering TestController::startTest()\n";
     testCompletionPromise = std::promise<void>(); // Reset the completion promise for the new test.
     testCompletionPromise_set = false; // Reset flag for new test.
     m_cliBlockFlag = false; // Reset for new test.
@@ -94,6 +98,7 @@ void TestController::startTest(const Config& config) {
             transitionTo(State::ERRORED);
             return;
         }
+        
 #endif
         transitionTo(State::ACCEPTING);
     } else { // Client mode
@@ -106,14 +111,30 @@ void TestController::startTest(const Config& config) {
     }
 }
 
+
 /**
  * @brief Stops the current test and closes network resources.
  */
 void TestController::stopTest() {
-    Logger::log("Info: Stopping the test.");
+    Logger::log("Debug: TestController::stopTest() called.");
+    if (m_stopped.exchange(true)) {
+        Logger::log("Debug: TestController::stopTest() already stopped, returning.");
+        return; // Already stopped
+    }
+    Logger::log("Info: Stopping the test components.");
+    Logger::log("Debug: Calling packetGenerator->stop().");
     packetGenerator->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
+    Logger::log("Debug: packetGenerator->stop() completed.");
+    Logger::log("Debug: Calling packetReceiver->stop().");
     packetReceiver->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
+    Logger::log("Debug: packetReceiver->stop() completed.");
+    Logger::log("Debug: Calling networkInterface->close().");
     networkInterface->close();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
+    Logger::log("Debug: networkInterface->close() completed.");
+    Logger::log("Debug: TestController::stopTest() finished.");
 }
 
 /**
@@ -247,7 +268,7 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            std::thread(&TestController::stopTest, this).detach();
+            stopTest(); // Stop components before signaling completion
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
@@ -270,7 +291,7 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            std::thread(&TestController::stopTest, this).detach();
+            stopTest(); // Stop components before signaling completion
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;

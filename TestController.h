@@ -86,6 +86,7 @@ private:
     std::mutex m_cliBlockMutex;
     std::condition_variable m_cliBlockCv;
     std::atomic<bool> m_cliBlockFlag; // Set to true when test is finished/errored
+    std::atomic<bool> m_stopped; // Flag to ensure stopTest is only called once.
 
     
 
