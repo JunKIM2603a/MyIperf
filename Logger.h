@@ -10,6 +10,7 @@
 #include <fstream>
 #include <cstdarg>
 #include <vector>
+#include <filesystem>
 #include "Protocol.h"
 
 
@@ -39,27 +40,30 @@ inline std::string string_format(const char* fmt, ...) {
     return std::string(buffer.data());
 }
 
-// 로그용 매크로 (여기서는 콘솔에 출력)
-#define LOG_ERROR(msg) \
-    do { \
-        std::cerr << "[ERROR] " << msg << std::endl; \
-    } while (0)
+// 로그용 함수
+inline void logError(const std::string& msg) {
+    std::cerr << "[ERROR] " << msg << std::endl;
+}
 
-// 커스텀 Assert 매크로
+// 커스텀 Assert 함수
+inline void assertLog(bool condition, const char* conditionStr, const char* file, int line, const char* func, const std::string& msg) {
+    if (!condition) {
+        std::ostringstream oss;
+        oss << "Assertion failed!\n"
+            << "  Condition: " << conditionStr << "\n"
+            << "  Message: "   << msg << "\n"
+            << "  File: "      << file << "\n"
+            << "  Line: "      << line << "\n"
+            << "  Function: "  << func << "\n";
+        logError(oss.str());
+        std::abort();
+    }
+}
+
+// New ASSERT_LOG macro that calls the assertLog function
 #define ASSERT_LOG(cond, fmt, ...) \
-    do { \
-        if (!(cond)) { \
-            std::ostringstream oss; \
-            oss << "Assertion failed!\n" \
-                << "  Condition: " << #cond << "\n" \
-                << "  Message: "   << string_format(fmt, ##__VA_ARGS__) << "\n" \
-                << "  File: "      << __FILE__ << "\n" \
-                << "  Line: "      << __LINE__ << "\n" \
-                << "  Function: "  << __func__ << "\n"; \
-            LOG_ERROR(oss.str()); \
-            std::abort(); \
-        } \
-    } while (0)
+    assertLog(cond, #cond, __FILE__, __LINE__, __func__, string_format(fmt, ##__VA_ARGS__))
+
 
 
 
@@ -77,8 +81,10 @@ public:
     /**
      * @brief Starts the logger service.
      * This must be called before any logging is done.
+     * @param enableFileLogging If true, logs will be saved to a file.
+     * @param mode The mode of operation (e.g., "CLIENT" or "SERVER") to be included in the log file name.
      */
-    static void start();
+    static void start(bool enableFileLogging = false, const std::string& mode = "");
 
     /**
      * @brief Stops the logger service and cleans up resources.
@@ -109,14 +115,22 @@ private:
      */
     static void logWorker();
 
+    /**
+     * @brief Manages log file rotation, keeping only the most recent 10 logs for the current mode.
+     * @param mode The current operation mode (e.g., "CLIENT" or "SERVER").
+     */
+    static void manageLogRotation(const std::string& mode);
+
     // Static member variables for the logging framework
     static std::mutex queueMutex;               // Mutex to protect the message queue.
     static std::condition_variable cv;          // Condition variable to signal new messages.
     static std::deque<std::string> messageQueue; // Queue to hold pending log messages.
     static std::thread workerThread;            // The dedicated thread for writing logs.
     static std::atomic<bool> running;           // Flag to control the logger's running state.
-    static const std::string Logger::getTimeNow(); // Get System time
+    static const std::string getTimeNow();      // Get System time
 
     // Optional file logging
     static std::ofstream logStream;             // File stream for persistent logs.
+    static std::atomic<bool> saveToFile;        // Controls whether logs are saved to a file.
+    static const std::string logDirectory;      // Directory to store log files.
 };

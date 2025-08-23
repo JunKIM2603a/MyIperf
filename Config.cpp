@@ -1,4 +1,4 @@
-﻿#include "Config.h"
+#include "Config.h"
 #include <stdexcept> // Required for std::invalid_argument
 
 /**
@@ -12,7 +12,8 @@ Config::Config() :
     protocol("TCP"),       // Default protocol: TCP
     targetIP("127.0.0.1"), // Default IP: localhost
     port(5201),            // Default port: 5201
-    mode(TestMode::CLIENT) // Default mode: Client
+    mode(TestMode::CLIENT), // Default mode: Client
+    saveLogs(false)        // Default saveLogs: false
 {}
 
 /**
@@ -106,6 +107,14 @@ Config::TestMode Config::getMode() const {
     return mode;
 }
 
+void Config::setSaveLogs(bool save) {
+    saveLogs = save;
+}
+
+bool Config::getSaveLogs() const {
+    return saveLogs;
+}
+
 /**
  * @brief Converts the Config object to a JSON representation.
  * @return A nlohmann::json object.
@@ -120,6 +129,7 @@ nlohmann::json Config::toJson() const {
     root["targetIP"] = targetIP;
     root["port"] = port;
     root["mode"] = (mode == TestMode::CLIENT ? "CLIENT" : "SERVER");
+    root["saveLogs"] = saveLogs;
     return root;
 }
 
@@ -138,6 +148,7 @@ Config Config::fromJson(const nlohmann::json& json) {
     if (json.contains("protocol")) config.setProtocol(json["protocol"].get<std::string>());
     if (json.contains("targetIP")) config.setTargetIP(json["targetIP"].get<std::string>());
     if (json.contains("port")) config.setPort(json["port"].get<int>());
+    if (json.contains("saveLogs")) config.setSaveLogs(json["saveLogs"].get<bool>());
     if (json.contains("mode")) {
         std::string modeStr = json["mode"].get<std::string>();
         if (modeStr == "CLIENT") {

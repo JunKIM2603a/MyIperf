@@ -1,8 +1,8 @@
-﻿#include "CLIHandler.h"
+#include "CLIHandler.h"
 #include "Logger.h"
 #include <iostream>
 #include <algorithm> // Required for std::transform
-#include "Logger.h"
+#include <vector> // Required for std::vector
 
 /**
  * @brief Constructs the CLIHandler.
@@ -26,6 +26,10 @@ void CLIHandler::run(int argc, char* argv[]) {
     try {
         // Parse command-line arguments to get the test configuration.
         Config config = parseArgs(argc, argv);
+
+        // Start the logger with the given configuration
+        Logger::start(config.getSaveLogs(), config.getMode() == Config::TestMode::CLIENT ? "CLIENT" : "SERVER");
+
         // Start the test with the parsed configuration.
         testController.startTest(config);
 
@@ -55,22 +59,39 @@ void CLIHandler::run(int argc, char* argv[]) {
  * @return A Config object with the parsed settings.
  */
 Config CLIHandler::parseArgs(int argc, char* argv[]) {
-    Config config;
+    Config config; // Start with default config
     std::string mode = "";
     std::string configFilePath = "";
 
-    // Iterate through all command-line arguments.
+    // First pass: find the config file path
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--config" && i + 1 < argc) {
+            configFilePath = argv[i + 1];
+            break;
+        }
+    }
+
+    // Load from config file if provided
+    if (!configFilePath.empty()) {
+        ConfigParser parser(configFilePath);
+        if (parser.load()) {
+            config = parser.getConfig();
+        } else {
+            throw std::runtime_error("Error: Failed to load configuration from file: " + configFilePath);
+        }
+    }
+
+    // Second pass: parse command-line args, which will override file/default settings
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
         if (arg == "--help" || arg == "-h") {
-            // This is now handled in main.cpp, so we just ignore it here.
+            // Handled in main
         } else if (arg == "--mode" && i + 1 < argc) {
             mode = argv[++i];
-            // Convert mode to uppercase for case-insensitive comparison.
             std::transform(mode.begin(), mode.end(), mode.begin(), ::toupper);
         } else if (arg == "--config" && i + 1 < argc) {
-            configFilePath = argv[++i];
+            ++i; // Skip value, already handled
         } else if (arg == "--target" && i + 1 < argc) {
             config.setTargetIP(argv[++i]);
         } else if (arg == "--port" && i + 1 < argc) {
@@ -81,12 +102,31 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
             config.setNumPackets(std::stoi(argv[++i]));
         } else if (arg == "--interval-ms" && i + 1 < argc) {
             config.setSendIntervalMs(std::stoi(argv[++i]));
-        } else {
-            throw std::runtime_error("Unknown argument or missing value: " + arg);
+        } else if (arg == "--save-logs" && i + 1 < argc) {
+            std::string val = argv[++i];
+            if (val == "true") {
+                config.setSaveLogs(true);
+            } else if (val == "false") {
+                config.setSaveLogs(false);
+            } else {
+                throw std::runtime_error("Invalid value for --save-logs. Must be 'true' or 'false'.");
+            }
+        } else if (arg.rfind("--", 0) == 0) {
+            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--help", "-h"};
+            bool is_known = false;
+            for(const auto& known : known_args) {
+                if (arg == known) {
+                    is_known = true;
+                    break;
+                }
+            }
+            if (!is_known) {
+                throw std::runtime_error("Unknown argument: " + arg);
+            }
         }
     }
 
-    // Set the test mode (Client or Server).
+    // Mode is mandatory on the command line
     if (mode == "CLIENT") {
         config.setMode(Config::TestMode::CLIENT);
     } else if (mode == "SERVER") {
@@ -95,19 +135,6 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
         throw std::runtime_error("Error: Mode (--mode) must be specified as either 'client' or 'server'.");
     }
 
-    // If a configuration file is specified, load it.
-    if (!configFilePath.empty()) {
-        ConfigParser parser(configFilePath);
-        if (parser.load()) {
-            Config fileConfig = parser.getConfig();
-            // Command-line arguments override settings from the config file.
-            if (config.getPacketSize() == 1024) config.setPacketSize(fileConfig.getPacketSize());
-            if (config.getTargetIP() == "127.0.0.1") config.setTargetIP(fileConfig.getTargetIP());
-            if (config.getPort() == 5201) config.setPort(fileConfig.getPort());
-        } else {
-            throw std::runtime_error("Error: Failed to load configuration from file: " + configFilePath);
-        }
-    }
     return config;
 }
 
@@ -132,6 +159,7 @@ void CLIHandler::printHelp() {
               << "  --packet-size <bytes>     Size of data packets in bytes (includes header).\n"
               << "  --num-packets <count>     Number of packets to send (0 for unlimited until interrupted).\n"
               << "  --interval-ms <ms>        Delay between sending packets in milliseconds (0 for continuous send).\n"
+              << "  --save-logs <true|false>  Save console logs to a file in the 'Log' directory.\n"
               << "  -h, --help                Display this help message and exit.\n\n"
               << "UNDERSTANDING THE FINAL REPORT:\n"
               << "  The report is split into two main sections:\n"
@@ -149,4 +177,3 @@ void CLIHandler::printHelp() {
               << "                       Formula: (Total Bytes * 8) / (Duration * 1,000,000)\n"
               << "  - Checksum/Sequence Errors: Indicate potential packet corruption or loss during transit.\n";
 }
-

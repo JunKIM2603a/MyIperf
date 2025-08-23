@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Start the asynchronous logger service.
-    Logger::start();
+    // Logger::start();
     Logger::log("Info: IPEFTC (IPerf Test Client/Server) application starting.");
 
     // Create the main controller for managing tests.

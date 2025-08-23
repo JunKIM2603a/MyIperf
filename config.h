@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <string>
 #include "nlohmann/json.hpp" // For handling JSON data
@@ -53,6 +53,9 @@ public:
     void setMode(TestMode m);
     TestMode getMode() const;
 
+    void setSaveLogs(bool save);
+    bool getSaveLogs() const;
+
     /**
      * @brief Serializes the Config object to a JSON object.
      * @return A nlohmann::json object representing the configuration.
@@ -74,4 +77,5 @@ private:
     std::string targetIP; // The IP address for the client to connect to or the server to listen on.
     int port;            // The port number for the network connection.
     TestMode mode;       // The operational mode: CLIENT or SERVER.
+    bool saveLogs;       // Whether to save logs to a file.
 };
