@@ -21,7 +21,7 @@ PacketGenerator::PacketGenerator(NetworkInterface* netInterface)
  * @param onComplete A callback to invoke when the test duration is complete.
  */
 void PacketGenerator::start(const Config& config, CompletionCallback onComplete) {
-    Logger::log("Debug: PacketGenerator::start entered.");
+    
     Logger::log("Info: Client test parameters - packetSize=" + std::to_string(config.getPacketSize()) +
                ", numPackets=" + std::to_string(config.getNumPackets()) +
                ", intervalMs=" + std::to_string(config.getSendIntervalMs()));
@@ -45,7 +45,7 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     Logger::log("Info: PacketGenerator started.");
     // Start the dedicated generator thread
     m_generatorThread = std::thread(&PacketGenerator::generatorThreadLoop, this);
-    Logger::log("Debug: PacketGenerator::start exited.");
+    
 }
 
 /**
@@ -53,7 +53,7 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
  * This improves performance by avoiding repeated allocation and construction.
  */
 void PacketGenerator::preparePacketTemplate() {
-    Logger::log("Debug: PacketGenerator::preparePacketTemplate entered.");
+    
     const size_t packetSize = config.getPacketSize();
     if (packetSize < sizeof(PacketHeader)) {
         Logger::log("Error: Packet size is smaller than header size. Cannot generate packets.");
@@ -78,14 +78,14 @@ void PacketGenerator::preparePacketTemplate() {
     if (payloadSize > 0) {
         memcpy(m_packetTemplate.data() + sizeof(PacketHeader), payload_str.data(), payloadSize);
     }
-    Logger::log("Debug: PacketGenerator::preparePacketTemplate exited.");
+    
 }
 
 /**
  * @brief Stops the packet generation process.
  */
 void PacketGenerator::stop() {
-    Logger::log("Debug: PacketGenerator::stop entered.");
+    
     if (running.exchange(false)) {
         m_cv.notify_one(); // Wake up the generator thread if it's sleeping
     }
@@ -98,7 +98,7 @@ void PacketGenerator::stop() {
     }
     m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketGenerator stopped.");
-    Logger::log("Debug: PacketGenerator::stop exited.");
+    
 }
 
 /**
@@ -121,7 +121,7 @@ void PacketGenerator::sendNextPacket() {
     // which doesn't change. If the header were part of the checksum, we would
     // need to update it here.
 
-    Logger::log("Debug: PacketGenerator::sendNextPacket - Calling asyncSend. bytes=" + std::to_string(packet.size()));
+    
     // 3. Asynchronously send the packet.
     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
         onPacketSent(bytesSent);
@@ -129,7 +129,7 @@ void PacketGenerator::sendNextPacket() {
 }
 
 void PacketGenerator::generatorThreadLoop() {
-    Logger::log("Debug: PacketGenerator::generatorThreadLoop started.");
+    
     while (running && shouldContinueSending()) {
         sendNextPacket();
 
@@ -149,7 +149,7 @@ void PacketGenerator::generatorThreadLoop() {
         Logger::log("Info: PacketGenerator reached target packet count: " + std::to_string(config.getNumPackets()));
         if (completionCallback) completionCallback();
     }
-    Logger::log("Debug: PacketGenerator::generatorThreadLoop finished.");
+    
 }
 
 /**
@@ -157,7 +157,7 @@ void PacketGenerator::generatorThreadLoop() {
  * @param bytesSent The number of bytes successfully sent.
  */
 void PacketGenerator::onPacketSent(size_t bytesSent) {
-    Logger::log("Debug: PacketGenerator::onPacketSent entered. Bytes sent: " + std::to_string(bytesSent));
+    
     if (bytesSent > 0) {
         totalBytesSent += bytesSent;
         totalPacketsSent++;
@@ -172,7 +172,7 @@ void PacketGenerator::onPacketSent(size_t bytesSent) {
         }
         return;
     }
-    Logger::log("Debug: PacketGenerator::onPacketSent exited.");
+    
 }
 
 bool PacketGenerator::shouldContinueSending() const {

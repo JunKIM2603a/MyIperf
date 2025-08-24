@@ -33,9 +33,9 @@ int main(int argc, char* argv[]) {
 
     // Wait for the test to complete before exiting the application.
     // This ensures all asynchronous operations have a chance to finish.
-    Logger::log("Debug: main() is now waiting for the test to complete...");
+    
     controller.getTestCompletionFuture().wait();
-    Logger::log("Debug: main()'s wait on test completion future is over.");
+    
 
     Logger::log("Info: IPEFTC application finished.");
     // Stop the logger service, ensuring all messages are flushed.

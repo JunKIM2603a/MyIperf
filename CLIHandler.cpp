@@ -39,21 +39,21 @@ void CLIHandler::run(int argc, char* argv[]) {
 
     // Now that we have a valid config, we can start the logger.
     Logger::start(config);
-    Logger::log("Debug: Logger started from CLIHandler.");
+    
 
     try {
         // With the logger running, start the test.
         testController.startTest(config);
-        Logger::log("Debug: TestController::startTest() called from CLIHandler.");
+        
 
         // If in server mode, wait for the test to complete before shutting down.
         if (config.getMode() == Config::TestMode::SERVER) {
             Logger::log("Info: Server is running. Waiting for the test to complete...");
             {
                 std::unique_lock<std::mutex> lock(testController.m_cliBlockMutex);
-                Logger::log("Debug: Server CLIHandler blocking...");
+                
                 testController.m_cliBlockCv.wait(lock, [&]{ return testController.m_cliBlockFlag.load(); });
-                Logger::log("Debug: Server CLIHandler unblocked.");
+                
             }
             testController.stopTest();
             Logger::log("Info: Server test finished. Shutting down.");
@@ -62,7 +62,7 @@ void CLIHandler::run(int argc, char* argv[]) {
         // The logger is running, so we can use it for test-related errors.
         Logger::log("Error: An exception occurred during the test: " + std::string(e.what()));
     }
-    Logger::log("Debug: CLIHandler::run finished.");
+    
 }
 
 
