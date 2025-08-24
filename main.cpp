@@ -10,22 +10,17 @@
  * @return 0 on successful execution, non-zero otherwise.
  */
 int main(int argc, char* argv[]) {
-    std::cerr << "DEBUG: Entering main()\n";
-
+    // This initial log goes to cerr because the logger is not yet started.
+    std::cerr << "DEBUG: main() started." << std::endl;
 
     // Iterate through all command-line arguments.
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-
         if (arg == "--help" || arg == "-h") {
             CLIHandler::printHelp();
             exit(0);
         }
     }
-
-    // Start the asynchronous logger service.
-    // Logger::start();
-    Logger::log("Info: IPEFTC (IPerf Test Client/Server) application starting.");
 
     // Create the main controller for managing tests.
     TestController controller;
@@ -33,18 +28,21 @@ int main(int argc, char* argv[]) {
     CLIHandler cli(controller);
 
     // Run the command-line handler to parse arguments and start the test.
+    // Logger::start() is called inside cli.run()
     cli.run(argc, argv);
 
     // Wait for the test to complete before exiting the application.
     // This ensures all asynchronous operations have a chance to finish.
-    Logger::log("Info: Waiting for the test to complete...");
+    Logger::log("Debug: main() is now waiting for the test to complete...");
     controller.getTestCompletionFuture().wait();
+    Logger::log("Debug: main()'s wait on test completion future is over.");
 
     Logger::log("Info: IPEFTC application finished.");
     // Stop the logger service, ensuring all messages are flushed.
     Logger::stop();
     
-    std::this_thread::sleep_for(std::chrono::seconds(10)); // ADDED DELAY for debug pipe communication
+    // This final log goes to cerr because the logger is stopped.
+    std::cerr << "DEBUG: main() is about to exit." << std::endl;
 
     return 0;
 }

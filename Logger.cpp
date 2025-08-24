@@ -182,66 +182,48 @@ void Logger::start(const Config& config) {
 }
 
 void Logger::stop() {
-    Logger::log("Debug: Logger::stop() called.");
+    Logger::log("Info: Stopping the logger.");
+    
+    // 먼저 모든 작업 스레드에 종료 신호를 보냅니다.
     running = false;
-    cv.notify_all();
-
-    // Give logWorker a chance to process remaining messages and exit its loop
-    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // ADDED DELAY
+    cv.notify_one();
 
 #ifdef _WIN32
-    Logger::log("Debug: Logger::stop() - Attempting to unblock pipeThread.");
-    if (!pipeName.empty()) {
-        // Create a dummy client to unblock ConnectNamedPipe
-        HANDLE hDummyPipe = CreateFile(
-            pipeName.c_str(),
-            GENERIC_WRITE,
-            0,
-            NULL,
-            OPEN_EXISTING,
-            0,
-            NULL);
-        if (hDummyPipe != INVALID_HANDLE_VALUE) {
-            CloseHandle(hDummyPipe);
-            Logger::log("Debug: Logger::stop() - Dummy pipe client created and closed.");
-        } else {
-            Logger::log("Warning: Logger::stop() - Failed to create dummy pipe client. Error: " + std::to_string(GetLastError()));
+    // Windows 환경에서만 명명된 파이프를 처리합니다.
+    if (hPipe != INVALID_HANDLE_VALUE) {
+        Logger::log("Debug: Cancelling pending I/O on named pipe.");
+        // 파이프 핸들에 대한 모든 보류 중인 I/O 작업을 취소합니다.
+        // 이것은 ConnectNamedPipe() 호출이 즉시 반환되도록 합니다.
+        if (!CancelIoEx(hPipe, NULL)) {
+            Logger::log("Error: Failed to cancel named pipe I/O. Error: " + std::to_string(GetLastError()));
         }
+        
+        // 파이프 스레드가 종료될 때까지 기다립니다.
+        if (pipeThread.joinable()) {
+            pipeThread.join();
+        }
+        
+        // 스레드가 종료된 후 핸들을 닫습니다.
+        CloseHandle(hPipe);
+        hPipe = INVALID_HANDLE_VALUE;
     }
 #endif
 
-    // workerThread를 먼저 join하여 모든 로그 처리를 완료하도록 합니다.
-    Logger::log("Debug: Logger::stop() - Joining workerThread.");
+    // 로거 작업 스레드가 종료될 때까지 기다립니다.
     if (workerThread.joinable()) {
         workerThread.join();
     }
-    Logger::log("Debug: Logger::stop() - workerThread joined.");
 
-#ifdef _WIN32
-    // Windows 환경에서만 pipeThread를 join합니다.
-    Logger::log("Debug: Logger::stop() - Joining pipeThread.");
-    if (pipeThread.joinable()) {
-        pipeThread.join();
-    }
-    Logger::log("Debug: Logger::stop() - pipeThread joined.");
-#endif
-
-    if (saveToFile && logStream.is_open()) {
-        Logger::log("Debug: Logger::stop() - Flushing and closing logStream.");
-        logStream.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (logStream.is_open()) {
         logStream.close();
-        Logger::log("Debug: Logger::stop() - logStream closed.");
     }
-    Logger::log("Debug: Logger::stop() finished.");
+    std::cerr << "Debug: Logger::stop completed." << std::endl;
 }
 
 void Logger::log(const std::string& message) {
+    std::lock_guard<std::mutex> lock(queueMutex);
     if (!running) return;
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        messageQueue.push_back(message);
-    }
+    messageQueue.push_back(message);
     cv.notify_one();
 }
 
@@ -254,7 +236,7 @@ void Logger::logWorker() {
             std::unique_lock<std::mutex> lock(queueMutex);
             cv.wait(lock, [] { return !messageQueue.empty() || !running; });
             if (!running && messageQueue.empty()) {
-                // Logger::log("Debug: logWorker - Exiting loop (not running and queue empty)."); // REMOVED
+                std::cerr << "Debug: logWorker - Shutdown condition met, breaking loop.\n";
                 break;
             }
             writeQueue.swap(messageQueue);
@@ -276,7 +258,7 @@ void Logger::logWorker() {
                 return out;
             }() ;
             
-            std::cout << colored << std::endl;
+            std::cerr << colored << std::endl;
 
             if (saveToFile && logStream.is_open()) {
                 logStream << out << std::endl;
@@ -295,7 +277,6 @@ void Logger::logWorker() {
         }
         std::cerr << "Debug: logWorker loop - bottom.\n";
     }
-    // Logger::log("Debug: logWorker finished."); // REMOVED
 }
 
 void Logger::writeFinalReport(const std::string& role,

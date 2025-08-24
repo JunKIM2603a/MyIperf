@@ -86,10 +86,13 @@ void PacketGenerator::preparePacketTemplate() {
  */
 void PacketGenerator::stop() {
     Logger::log("Debug: PacketGenerator::stop entered.");
-    if (!running.exchange(false)) { // Atomically set running to false and get the old value.
-        return; // Already stopped.
+    if (running.exchange(false)) {
+        m_cv.notify_one(); // Wake up the generator thread if it's sleeping
     }
-    m_cv.notify_one(); // Wake up the generator thread if it's sleeping
+
+    // Use the existing mutex to protect the joinable() check and the join() call
+    // to prevent race conditions if stop() is called from multiple threads.
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_generatorThread.joinable()) {
         m_generatorThread.join();
     }
@@ -160,7 +163,13 @@ void PacketGenerator::onPacketSent(size_t bytesSent) {
         totalPacketsSent++;
     } else {
         Logger::log("Warning: Send operation failed or sent 0 bytes. Stopping generator.");
-        stop();
+        // Directly calling stop() from this callback (which runs on a network worker thread)
+        // can cause a deadlock, because stop() joins the generator thread, and the main
+        // thread might be waiting on the network worker thread.
+        // Instead, we just signal the generator thread to stop.
+        if (running.exchange(false)) {
+            m_cv.notify_one();
+        }
         return;
     }
     Logger::log("Debug: PacketGenerator::onPacketSent exited.");

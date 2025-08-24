@@ -2,6 +2,7 @@
 
 #include "TestController.h"
 #include "ConfigParser.h"
+#include "Config.h"
 #include <string>
 #include <vector>
 #include <map>
