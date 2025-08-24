@@ -9,6 +9,8 @@
 #include "nlohmann/json.hpp"
 #include <cstring>
 #include <thread>
+#include <string>
+#include <memory>
 
 // Helper function to convert State enum to string for logging
 const char* stateToString(TestController::State state) {
@@ -44,7 +46,7 @@ const char* MessageTypeToString(MessageType type) {
  * @brief Constructs the TestController.
  * Initializes network interface, generator, receiver, and the state timeout timer.
  */
-TestController::TestController() : currentState(State::IDLE), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
+TestController::TestController() : currentState(State::IDLE), m_stopped(false), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
     std::cerr << "DEBUG: Entering TestController::TestController()\n";
     std::cerr << "DEBUG: TestController::TestController() - Before networkInterface creation.\n"; // NEW LOG
     // Select the appropriate network interface based on the operating system.
@@ -265,7 +267,11 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            stopTest(); // Stop components before signaling completion
+            // The call to stopTest() is removed from here to prevent deadlocks.
+            // The worker thread, which calls this transition, cannot join itself.
+            // The main thread, after being unblocked by the promise, is now responsible
+            // for calling stopTest() to clean up resources.
+            // stopTest();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
@@ -288,7 +294,11 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            stopTest(); // Stop components before signaling completion
+            // The call to stopTest() is removed from here to prevent deadlocks.
+            // The worker thread, which calls this transition, cannot join itself.
+            // The main thread, after being unblocked by the promise, is now responsible
+            // for calling stopTest() to clean up resources.
+            // stopTest();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
@@ -468,4 +478,3 @@ void TestController::sendClientStatsAndAwaitAck() {
 void TestController::cancelTimer() {
     // No-op placeholder for now
 }
-

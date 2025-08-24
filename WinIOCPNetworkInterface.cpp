@@ -3,6 +3,7 @@
 #include "Logger.h"
 #include <stdexcept>
 #include <chrono>
+#include <ws2tcpip.h> // For InetPton, InetNtop
 #include <string>
 #include <Mswsock.h> // For CancelIoEx
 

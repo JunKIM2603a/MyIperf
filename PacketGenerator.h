@@ -8,6 +8,8 @@
 #include <atomic>
 #include <thread>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
 
 /**
  * @class PacketGenerator
@@ -57,6 +59,11 @@ private:
     void sendNextPacket();
 
     /**
+     * @brief The main loop for the generator thread, responsible for timing the packet sends.
+     */
+    void generatorThreadLoop();
+
+    /**
      * @brief The callback handler for when a send operation completes.
      * @param bytesSent The number of bytes that were sent.
      */
@@ -77,6 +84,10 @@ private:
     uint32_t packetCounter;                 // Counter for numbering packets.
     CompletionCallback completionCallback;  // Callback to notify completion.
     std::vector<char> m_packetTemplate;     // Pre-built packet template for efficiency.
+
+    std::thread m_generatorThread;          // Thread to manage the sending loop.
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
 
     std::chrono::steady_clock::time_point m_startTime;
     std::chrono::steady_clock::time_point m_endTime;

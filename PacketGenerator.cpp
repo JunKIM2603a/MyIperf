@@ -4,6 +4,7 @@
 #include <iostream>
 #include <random> // For potential future use with random data generation
 #include <cstring>
+#include <type_traits> // For std::underlying_type_t
 
 // #define DEBUG_MINIMAL_PACKET // Removed for granular logging
 
@@ -42,8 +43,8 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     preparePacketTemplate();
 
     Logger::log("Info: PacketGenerator started.");
-    // Initiate the first asynchronous send operation.
-    sendNextPacket();
+    // Start the dedicated generator thread
+    m_generatorThread = std::thread(&PacketGenerator::generatorThreadLoop, this);
     Logger::log("Debug: PacketGenerator::start exited.");
 }
 
@@ -66,8 +67,8 @@ void PacketGenerator::preparePacketTemplate() {
 
     PacketHeader header;
     header.startCode = PROTOCOL_START_CODE;
-    header.senderId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::CLIENT) : to_underlying(Config::TestMode::SERVER);
-    header.receiverId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::SERVER) : to_underlying(Config::TestMode::CLIENT);
+    header.senderId = static_cast<std::underlying_type_t<Config::TestMode>>(config.getMode());
+    header.receiverId = static_cast<std::underlying_type_t<Config::TestMode>>((config.getMode() == Config::TestMode::CLIENT) ? Config::TestMode::SERVER : Config::TestMode::CLIENT);
     header.messageType = MessageType::DATA_PACKET;
     header.packetCounter = 0; // Will be updated per packet
     header.payloadSize = static_cast<uint32_t>(payloadSize);
@@ -88,6 +89,10 @@ void PacketGenerator::stop() {
     if (!running.exchange(false)) { // Atomically set running to false and get the old value.
         return; // Already stopped.
     }
+    m_cv.notify_one(); // Wake up the generator thread if it's sleeping
+    if (m_generatorThread.joinable()) {
+        m_generatorThread.join();
+    }
     m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketGenerator stopped.");
     Logger::log("Debug: PacketGenerator::stop exited.");
@@ -98,15 +103,7 @@ void PacketGenerator::stop() {
  * This function is the core of the generation loop.
  */
 void PacketGenerator::sendNextPacket() {
-    Logger::log("Debug: PacketGenerator::sendNextPacket entered. Packet Counter: " + std::to_string(packetCounter));
-    if (!running) {
-        Logger::log("Debug: PacketGenerator::sendNextPacket exited (stopping condition met).");
-        return;
-    }
-
-    if (m_packetTemplate.empty()) {
-        Logger::log("Error: Packet template is not initialized. Stopping generator.");
-        stop();
+    if (!running || m_packetTemplate.empty()) {
         return;
     }
 
@@ -126,7 +123,30 @@ void PacketGenerator::sendNextPacket() {
     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
         onPacketSent(bytesSent);
     });
-    Logger::log("Debug: PacketGenerator::sendNextPacket exited.");
+}
+
+void PacketGenerator::generatorThreadLoop() {
+    Logger::log("Debug: PacketGenerator::generatorThreadLoop started.");
+    while (running && shouldContinueSending()) {
+        sendNextPacket();
+
+        if (config.getSendIntervalMs() > 0) {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            // Wait for the specified interval, but allow stop() to wake us up early.
+            m_cv.wait_for(lock, std::chrono::milliseconds(config.getSendIntervalMs()));
+        }
+
+        // After sleeping (or being woken up), check the running flag again before looping.
+        if (!running) break;
+    }
+
+    if (running) { // If we exited the loop because we finished, not because we were stopped
+        running = false;
+        m_endTime = std::chrono::steady_clock::now();
+        Logger::log("Info: PacketGenerator reached target packet count: " + std::to_string(config.getNumPackets()));
+        if (completionCallback) completionCallback();
+    }
+    Logger::log("Debug: PacketGenerator::generatorThreadLoop finished.");
 }
 
 /**
@@ -141,19 +161,7 @@ void PacketGenerator::onPacketSent(size_t bytesSent) {
     } else {
         Logger::log("Warning: Send operation failed or sent 0 bytes. Stopping generator.");
         stop();
-    }
-
-    // If still running and conditions allow, continue the loop by sending the next packet.
-    if (running && shouldContinueSending()) {
-        if (config.getSendIntervalMs() > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(config.getSendIntervalMs()));
-        }
-        sendNextPacket();
-    } else if (running && !shouldContinueSending()) {
-        running = false;
-        m_endTime = std::chrono::steady_clock::now();
-        Logger::log("Info: PacketGenerator reached target packet count: " + std::to_string(config.getNumPackets()));
-        if (completionCallback) completionCallback();
+        return;
     }
     Logger::log("Debug: PacketGenerator::onPacketSent exited.");
 }
@@ -179,4 +187,3 @@ TestStats PacketGenerator::getStats() const {
     // Received stats, checksum errors, sequence errors are not applicable for generator, so they remain 0 (default initialized)
     return stats;
 }
-
