@@ -4,6 +4,9 @@
 #include <stdexcept>
 #include <chrono>
 #include <string>
+#include <Mswsock.h> // For CancelIoEx
+
+#pragma comment(lib, "Mswsock.lib")
 
 // Helper function to get the error message string from a Windows error code.
 std::string getErrorMessage(DWORD errorCode) {
@@ -80,39 +83,65 @@ bool WinIOCPNetworkInterface::initialize(const std::string& ip, int port) {
 }
 
 /**
- * @brief Shuts down the interface, closes handles, and stops threads.
+ * @brief Shuts down the interface, closes handles, and stops threads gracefully.
  */
 void WinIOCPNetworkInterface::close() {
     if (!running.exchange(false)) {
-        return; // Already closed
+        return; // Already closed or closing
     }
+    Logger::log("Debug: WinIOCPNetworkInterface::close() started.");
 
-    // Post a special completion packet to each worker thread to wake it up and allow it to exit cleanly.
+    // 1. Cancel any pending I/O operations on the sockets.
+    // This helps unblock the worker threads from GetQueuedCompletionStatus.
+    if (listenSocket != INVALID_SOCKET) {
+        CancelIoEx((HANDLE)listenSocket, NULL);
+    }
+    if (clientSocket != INVALID_SOCKET) {
+        CancelIoEx((HANDLE)clientSocket, NULL);
+    }
+    Logger::log("Debug: Canceled pending I/O operations.");
+
+    // 2. Gracefully shut down the sockets.
+    // This signals the other side of the connection that we are closing.
+    if (clientSocket != INVALID_SOCKET) {
+        shutdown(clientSocket, SD_BOTH);
+    }
+    Logger::log("Debug: Shutdown client socket.");
+
+    // 3. Post completion statuses to wake up worker threads.
+    // This ensures they exit their loop if they are waiting on an empty queue.
     for (size_t i = 0; i < workerThreads.size(); ++i) {
         PostQueuedCompletionStatus(iocpHandle, 0, 0, NULL);
     }
+    Logger::log("Debug: Posted shutdown messages to worker threads.");
 
-    // Wait for all worker threads to terminate.
+    // 4. Wait for all worker threads to terminate.
     for (auto& t : workerThreads) {
         if (t.joinable()) {
             t.join();
         }
     }
     workerThreads.clear();
+    Logger::log("Debug: All worker threads have joined.");
 
+    // 5. Now it's safe to close the sockets and the IOCP handle.
     if (listenSocket != INVALID_SOCKET) {
         closesocket(listenSocket);
         listenSocket = INVALID_SOCKET;
+        Logger::log("Debug: Closed listen socket.");
     }
     if (clientSocket != INVALID_SOCKET) {
         closesocket(clientSocket);
         clientSocket = INVALID_SOCKET;
+        Logger::log("Debug: Closed client socket.");
     }
     if (iocpHandle != NULL) {
         CloseHandle(iocpHandle);
         iocpHandle = NULL;
+        Logger::log("Debug: Closed IOCP handle.");
     }
-    Logger::log("Info: Network interface closed.");
+
+    Logger::log("Info: Network interface closed successfully.");
 }
 
 /**

@@ -38,10 +38,46 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     packetCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
     
+    // Prepare the reusable packet template
+    preparePacketTemplate();
+
     Logger::log("Info: PacketGenerator started.");
     // Initiate the first asynchronous send operation.
     sendNextPacket();
     Logger::log("Debug: PacketGenerator::start exited.");
+}
+
+/**
+ * @brief Prepares the packet template to be reused for sending.
+ * This improves performance by avoiding repeated allocation and construction.
+ */
+void PacketGenerator::preparePacketTemplate() {
+    Logger::log("Debug: PacketGenerator::preparePacketTemplate entered.");
+    const size_t packetSize = config.getPacketSize();
+    if (packetSize < sizeof(PacketHeader)) {
+        Logger::log("Error: Packet size is smaller than header size. Cannot generate packets.");
+        m_packetTemplate.clear();
+        return;
+    }
+
+    m_packetTemplate.resize(packetSize);
+    const size_t payloadSize = packetSize - sizeof(PacketHeader);
+    std::string payload_str = buildExpectedPayload(0, payloadSize); // Use a dummy packet number for the template
+
+    PacketHeader header;
+    header.startCode = PROTOCOL_START_CODE;
+    header.senderId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::CLIENT) : to_underlying(Config::TestMode::SERVER);
+    header.receiverId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::SERVER) : to_underlying(Config::TestMode::CLIENT);
+    header.messageType = MessageType::DATA_PACKET;
+    header.packetCounter = 0; // Will be updated per packet
+    header.payloadSize = static_cast<uint32_t>(payloadSize);
+    header.checksum = calculateChecksum(payload_str.data(), payloadSize);
+
+    memcpy(m_packetTemplate.data(), &header, sizeof(PacketHeader));
+    if (payloadSize > 0) {
+        memcpy(m_packetTemplate.data() + sizeof(PacketHeader), payload_str.data(), payloadSize);
+    }
+    Logger::log("Debug: PacketGenerator::preparePacketTemplate exited.");
 }
 
 /**
@@ -58,42 +94,35 @@ void PacketGenerator::stop() {
 }
 
 /**
- * @brief Creates and sends the next packet.
+ * @brief Creates and sends the next packet using the pre-built template.
  * This function is the core of the generation loop.
  */
 void PacketGenerator::sendNextPacket() {
     Logger::log("Debug: PacketGenerator::sendNextPacket entered. Packet Counter: " + std::to_string(packetCounter));
-    // Stop if the generator is no longer running or the test duration has been reached.
     if (!running) {
-        
         Logger::log("Debug: PacketGenerator::sendNextPacket exited (stopping condition met).");
         return;
     }
 
-    Logger::log("Debug: PacketGenerator::sendNextPacket - Preparing payload.");
-    // 1. Prepare the packet payload.
-    size_t payloadSize = config.getPacketSize() - sizeof(PacketHeader);
-    std::vector<char> packet(config.getPacketSize());
-    std::string payload_str = buildExpectedPayload(packetCounter, payloadSize);
+    if (m_packetTemplate.empty()) {
+        Logger::log("Error: Packet template is not initialized. Stopping generator.");
+        stop();
+        return;
+    }
 
-    Logger::log("Debug: PacketGenerator::sendNextPacket - Constructing header.");
-    // 2. Construct the packet header.
-    PacketHeader header;
-    header.startCode = PROTOCOL_START_CODE;
-    header.senderId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::CLIENT) : to_underlying(Config::TestMode::SERVER);
-    header.receiverId = (config.getMode() == Config::TestMode::CLIENT) ? to_underlying(Config::TestMode::SERVER) : to_underlying(Config::TestMode::CLIENT);
-    header.messageType = MessageType::DATA_PACKET;
-    header.packetCounter = packetCounter++;
-    header.payloadSize = static_cast<uint32_t>(payloadSize);
-    header.checksum = calculateChecksum(payload_str.data(), payloadSize);
+    // 1. Create a working copy of the packet from the template.
+    std::vector<char> packet = m_packetTemplate;
 
-    Logger::log("Debug: PacketGenerator::sendNextPacket - Assembling packet.");
-    // 3. Assemble the final packet by combining the header and payload.
-    memcpy(packet.data(), &header, sizeof(PacketHeader));
-    memcpy(packet.data() + sizeof(PacketHeader), payload_str.data(), payloadSize);
+    // 2. Get a pointer to the header and update the packet counter.
+    PacketHeader* header = reinterpret_cast<PacketHeader*>(packet.data());
+    header->packetCounter = packetCounter++;
+
+    // Note: The checksum is not recalculated here because it's based on the payload,
+    // which doesn't change. If the header were part of the checksum, we would
+    // need to update it here.
 
     Logger::log("Debug: PacketGenerator::sendNextPacket - Calling asyncSend. bytes=" + std::to_string(packet.size()));
-    // 4. Asynchronously send the packet.
+    // 3. Asynchronously send the packet.
     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
         onPacketSent(bytesSent);
     });

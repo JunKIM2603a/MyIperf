@@ -9,6 +9,8 @@ project(IPEFTC LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+
+
 # --- nlohmann/json library setup ---
 # Prefer a local version if available, otherwise fetch from GitHub.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nlohmann/json.hpp")
@@ -71,6 +73,24 @@ endif()
 
 # Add the main executable.
 add_executable(${CMAKE_PROJECT_NAME} ${COMMON_SOURCE_FILES})
+
+# --- Compiler-specific Optimizations ---
+# Add aggressive optimization flags for Release builds to maximize performance.
+if(MSVC)
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Release>:/O2>
+        $<$<CONFIG:RelWithDebInfo>:/O2>
+    )
+    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+else()
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Release>:-O3 -flto>
+        $<$<CONFIG:RelWithDebInfo>:-O2 -flto>
+    )
+    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+endif()
 
 # Add include directories for all source files.
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

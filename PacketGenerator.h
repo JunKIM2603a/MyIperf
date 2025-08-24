@@ -64,6 +64,8 @@ private:
 
     bool shouldContinueSending() const;
 
+    void preparePacketTemplate();
+
     // Member variables
 
     NetworkInterface* networkInterface;     // The network interface for sending data.
@@ -74,6 +76,7 @@ private:
     Config config;                          // The configuration for the current test.
     uint32_t packetCounter;                 // Counter for numbering packets.
     CompletionCallback completionCallback;  // Callback to notify completion.
+    std::vector<char> m_packetTemplate;     // Pre-built packet template for efficiency.
 
     std::chrono::steady_clock::time_point m_startTime;
     std::chrono::steady_clock::time_point m_endTime;

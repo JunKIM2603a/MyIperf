@@ -124,15 +124,12 @@ void TestController::stopTest() {
     Logger::log("Info: Stopping the test components.");
     Logger::log("Debug: Calling packetGenerator->stop().");
     packetGenerator->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: packetGenerator->stop() completed.");
     Logger::log("Debug: Calling packetReceiver->stop().");
     packetReceiver->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: packetReceiver->stop() completed.");
     Logger::log("Debug: Calling networkInterface->close().");
     networkInterface->close();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: networkInterface->close() completed.");
     Logger::log("Debug: TestController::stopTest() finished.");
 }
