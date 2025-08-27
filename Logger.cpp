@@ -68,16 +68,16 @@ void Logger::manageLogRotation(const std::string& mode) {
 
 #ifdef _WIN32
 void Logger::pipeWorker() {
-    
+    std::cerr << "Debug: pipeWorker started.\n";
     while (running) {
-        
+        std::cerr << "Debug: pipeWorker loop - top.\n";
         if (pipeName.empty()) { // Don't start until pipe name is set
-            
+            std::cerr << "Debug: pipeWorker - pipeName is empty, waiting.\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
-        
+        std::cerr << "Debug: pipeWorker - Creating named pipe.\n";
         hPipe = CreateNamedPipe(
             pipeName.c_str(),
             PIPE_ACCESS_OUTBOUND,
@@ -90,15 +90,15 @@ void Logger::pipeWorker() {
 
         if (hPipe == INVALID_HANDLE_VALUE) {
             logError("Could not create named pipe. Error: " + std::to_string(GetLastError()));
-            
+            std::cerr << "Debug: pipeWorker - CreateNamedPipe failed, sleeping.\n";
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
         Logger::log("Info: Named pipe '" + pipeName + "' created. Waiting for a client to connect...");
-        
+        std::cerr << "Debug: pipeWorker - Calling ConnectNamedPipe.\n";
         bool connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
-        
+        std::cerr << "Debug: pipeWorker - ConnectNamedPipe returned. Connected: " + std::to_string(connected) + "\n";
 
         if (connected && running) {
             Logger::log("Info: Client connected to named pipe '" + pipeName + "'.");
@@ -106,9 +106,10 @@ void Logger::pipeWorker() {
             while (pipeConnected && running) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            
+            std::cerr << "Debug: pipeWorker - Inner connected loop exited.\n";
         } else {
-            pipeConnected = false; 
+            pipeConnected = false;
+            std::cerr << "Debug: pipeWorker - Not connected or running is false.\n";
         }
 
         if(hPipe != INVALID_HANDLE_VALUE) {
@@ -117,21 +118,19 @@ void Logger::pipeWorker() {
             CloseHandle(hPipe);
             hPipe = INVALID_HANDLE_VALUE;
         }
-        
-        
 
         if(pipeConnected) {
              Logger::log("Info: Client disconnected from named pipe '" + pipeName + "'.");
         }
         pipeConnected = false;
-        
+        std::cerr << "Debug: pipeWorker loop - bottom.\n";
     }
-    
+    std::cerr << "Debug: pipeWorker finished.\n";
 }
 #endif
 
 void Logger::start(const Config& config) {
-    
+    std::cerr << "DEBUG: Entering Logger::start()\n";
     running = true;
 
     const std::string mode = config.getMode() == Config::TestMode::CLIENT ? "CLIENT" : "SERVER";
@@ -183,65 +182,83 @@ void Logger::start(const Config& config) {
 }
 
 void Logger::stop() {
-    Logger::log("Info: Stopping the logger.");
-    
-    // 먼저 모든 작업 스레드에 종료 신호를 보냅니다.
+    Logger::log("Debug: Logger::stop() called.");
     running = false;
-    cv.notify_one();
+    cv.notify_all();
+
+    // Give logWorker a chance to process remaining messages and exit its loop
+    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // ADDED DELAY
 
 #ifdef _WIN32
-    // Windows 환경에서만 명명된 파이프를 처리합니다.
-    if (hPipe != INVALID_HANDLE_VALUE) {
-        
-        // 파이프 핸들에 대한 모든 보류 중인 I/O 작업을 취소합니다.
-        // 이것은 ConnectNamedPipe() 호출이 즉시 반환되도록 합니다.
-        if (!CancelIoEx(hPipe, NULL)) {
-            Logger::log("Error: Failed to cancel named pipe I/O. Error: " + std::to_string(GetLastError()));
+    Logger::log("Debug: Logger::stop() - Attempting to unblock pipeThread.");
+    if (!pipeName.empty()) {
+        // Create a dummy client to unblock ConnectNamedPipe
+        HANDLE hDummyPipe = CreateFile(
+            pipeName.c_str(),
+            GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL);
+        if (hDummyPipe != INVALID_HANDLE_VALUE) {
+            CloseHandle(hDummyPipe);
+            Logger::log("Debug: Logger::stop() - Dummy pipe client created and closed.");
+        } else {
+            Logger::log("Warning: Logger::stop() - Failed to create dummy pipe client. Error: " + std::to_string(GetLastError()));
         }
-        
-        // 파이프 스레드가 종료될 때까지 기다립니다.
-        if (pipeThread.joinable()) {
-            pipeThread.join();
-        }
-        
-        // 스레드가 종료된 후 핸들을 닫습니다.
-        CloseHandle(hPipe);
-        hPipe = INVALID_HANDLE_VALUE;
     }
 #endif
 
-    // 로거 작업 스레드가 종료될 때까지 기다립니다.
+    // workerThread를 먼저 join하여 모든 로그 처리를 완료하도록 합니다.
+    Logger::log("Debug: Logger::stop() - Joining workerThread.");
     if (workerThread.joinable()) {
         workerThread.join();
     }
+    Logger::log("Debug: Logger::stop() - workerThread joined.");
 
-    if (logStream.is_open()) {
-        logStream.close();
+#ifdef _WIN32
+    // Windows 환경에서만 pipeThread를 join합니다.
+    Logger::log("Debug: Logger::stop() - Joining pipeThread.");
+    if (pipeThread.joinable()) {
+        pipeThread.join();
     }
-    
+    Logger::log("Debug: Logger::stop() - pipeThread joined.");
+#endif
+
+    if (saveToFile && logStream.is_open()) {
+        Logger::log("Debug: Logger::stop() - Flushing and closing logStream.");
+        logStream.flush();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        logStream.close();
+        Logger::log("Debug: Logger::stop() - logStream closed.");
+    }
+    Logger::log("Debug: Logger::stop() finished.");
 }
 
 void Logger::log(const std::string& message) {
-    std::lock_guard<std::mutex> lock(queueMutex);
     if (!running) return;
-    messageQueue.push_back(message);
+    {
+        std::lock_guard<std::mutex> lock(queueMutex);
+        messageQueue.push_back(message);
+    }
     cv.notify_one();
 }
 
 void Logger::logWorker() {
-    
+    std::cerr << "Debug: logWorker started.\n";
     while (true) {
-        
+        std::cerr << "Debug: logWorker loop - top.\n";
         std::deque<std::string> writeQueue;
         {
             std::unique_lock<std::mutex> lock(queueMutex);
             cv.wait(lock, [] { return !messageQueue.empty() || !running; });
             if (!running && messageQueue.empty()) {
-                
+                // Logger::log("Debug: logWorker - Exiting loop (not running and queue empty)."); // REMOVED
                 break;
             }
             writeQueue.swap(messageQueue);
-            
+            std::cerr << "Debug: logWorker - Message queue swapped. Count: " + std::to_string(writeQueue.size()) + "\n";
         }
 
         for (const auto& msg : writeQueue) {
@@ -259,7 +276,7 @@ void Logger::logWorker() {
                 return out;
             }() ;
             
-            std::cerr << colored << std::endl;
+            std::cout << colored << std::endl;
 
             if (saveToFile && logStream.is_open()) {
                 logStream << out << std::endl;
@@ -270,14 +287,15 @@ void Logger::logWorker() {
                 DWORD bytesWritten = 0;
                 bool success = WriteFile(hPipe, out.c_str(), out.length(), &bytesWritten, NULL);
                 if (!success) {
-                    
+                    std::cerr << "Debug: logWorker - WriteFile to pipe failed. Error: " + std::to_string(GetLastError()) + "\n";
                     pipeConnected = false;
                 }
             }
 #endif
         }
-        
+        std::cerr << "Debug: logWorker loop - bottom.\n";
     }
+    // Logger::log("Debug: logWorker finished."); // REMOVED
 }
 
 void Logger::writeFinalReport(const std::string& role,

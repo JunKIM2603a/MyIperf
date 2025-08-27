@@ -8,9 +8,7 @@
  * @brief Constructs the CLIHandler.
  * @param controller A reference to the TestController to be managed.
  */
-CLIHandler::CLIHandler(TestController& controller) : testController(controller) {
-    // No logging here, logger is not started yet.
-}
+CLIHandler::CLIHandler(TestController& controller) : testController(controller) {}
 
 /**
  * @brief Runs the command-line interface.
@@ -19,52 +17,42 @@ CLIHandler::CLIHandler(TestController& controller) : testController(controller) 
  * @param argv Argument values.
  */
 void CLIHandler::run(int argc, char* argv[]) {
-    std::cerr << "DEBUG: CLIHandler::run called." << std::endl;
+    std::cerr << "DEBUG: Entering CLIHandler::run()\n";
 
+    // If no arguments are provided, display help and exit.
     if (argc < 2) {
         printHelp();
         exit(0);
     }
 
-    Config config;
     try {
-        // First, parse the arguments. This can throw.
-        config = parseArgs(argc, argv);
-    } catch (const std::exception& e) {
-        // If parsing fails, the logger is not running. Print directly to stderr.
-        std::cerr << "Error: " << e.what() << std::endl;
-        printHelp();
-        exit(1); // Use a non-zero exit code for errors.
-    }
+        // Parse command-line arguments to get the test configuration.
+        Config config = parseArgs(argc, argv);
 
-    // Now that we have a valid config, we can start the logger.
-    Logger::start(config);
-    
+        // Start the logger with the given configuration
+        Logger::start(config);
 
-    try {
-        // With the logger running, start the test.
+        // Start the test with the parsed configuration.
         testController.startTest(config);
-        
 
         // If in server mode, wait for the test to complete before shutting down.
         if (config.getMode() == Config::TestMode::SERVER) {
             Logger::log("Info: Server is running. Waiting for the test to complete...");
+            // Block until the test completion is signaled by TestController
             {
                 std::unique_lock<std::mutex> lock(testController.m_cliBlockMutex);
-                
                 testController.m_cliBlockCv.wait(lock, [&]{ return testController.m_cliBlockFlag.load(); });
-                
             }
             testController.stopTest();
             Logger::log("Info: Server test finished. Shutting down.");
         }
     } catch (const std::exception& e) {
-        // The logger is running, so we can use it for test-related errors.
-        Logger::log("Error: An exception occurred during the test: " + std::string(e.what()));
+        // Log any errors that occur during setup or execution.
+        Logger::log("Error: " + std::string(e.what()));
+        printHelp();
+        exit(0);
     }
-    
 }
-
 
 /**
  * @brief Parses command-line arguments to configure the test.
@@ -91,7 +79,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
         if (parser.load()) {
             config = parser.getConfig();
         } else {
-            throw std::runtime_error("Failed to load configuration from file: " + configFilePath);
+            throw std::runtime_error("Error: Failed to load configuration from file: " + configFilePath);
         }
     }
 
@@ -146,12 +134,11 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
     } else if (mode == "SERVER") {
         config.setMode(Config::TestMode::SERVER);
     } else {
-        throw std::runtime_error("Mode (--mode) must be specified as either 'client' or 'server'.");
+        throw std::runtime_error("Error: Mode (--mode) must be specified as either 'client' or 'server'.");
     }
 
     return config;
 }
-
 
 /**
  * @brief Prints the command-line usage instructions.
