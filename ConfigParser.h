@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Config.h"
 #include <string>
@@ -31,6 +31,8 @@ public:
     Config getConfig() const;
 
 private:
-    std::string filepath; // The path to the configuration file.
-    Config configData;    // The Config object where the parsed data is stored.
+    /**< The path to the configuration file. */
+    std::string filepath;
+    /**< The Config object where the parsed data is stored. */
+    Config configData;
 };

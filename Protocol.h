@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -21,23 +21,44 @@ enum class MessageType : uint8_t {
  * @brief Holds comprehensive statistics for a test, including sent and received data.
  */
 struct TestStats {
-    long long totalBytesSent;           // Total bytes sent.
-    long long totalPacketsSent;         // Total packets sent.
-    long long totalBytesReceived;       // Total bytes received.
-    long long totalPacketsReceived;     // Total packets received.
-    long long failedChecksumCount;      // Number of packets that failed checksum validation.
-    long long sequenceErrorCount;       // Number of packets received out of sequence.
-    double duration;                    // Duration of the test in seconds.
-    double throughputMbps;              // Calculated throughput in Megabits per second.
+    /** @brief Total bytes sent. */
+    long long totalBytesSent;
+    /** @brief Total packets sent. */
+    long long totalPacketsSent;
+    /** @brief Total bytes received. */
+    long long totalBytesReceived;
+    /** @brief Total packets received. */
+    long long totalPacketsReceived;
+    /** @brief Number of packets that failed checksum validation. */
+    long long failedChecksumCount;
+    /** @brief Number of packets received out of sequence. */
+    long long sequenceErrorCount;
+    /** @brief Duration of the test in seconds. */
+    double duration;
+    /** @brief Calculated throughput in Megabits per second. */
+    double throughputMbps;
 
-    // Default constructor to initialize all stats to zero.
+    /**
+     * @brief Default constructor to initialize all stats to zero.
+     */
     TestStats() : totalBytesSent(0), totalPacketsSent(0), totalBytesReceived(0), totalPacketsReceived(0),
                   failedChecksumCount(0), sequenceErrorCount(0), duration(0.0), throughputMbps(0.0) {}
 };
 
 namespace nlohmann {
+    /**
+     * @brief Specialization of adl_serializer for the TestStats struct.
+     *
+     * This allows for automatic serialization and deserialization of TestStats
+     * objects to and from JSON format using the nlohmann::json library.
+     */
     template <>
     struct adl_serializer<TestStats> {
+        /**
+         * @brief Serializes a TestStats object to a JSON object.
+         * @param j The JSON object to serialize to.
+         * @param s The TestStats object to serialize.
+         */
         static void to_json(json& j, const TestStats& s) {
             j = nlohmann::json{{"totalBytesSent", s.totalBytesSent},
                                  {"totalPacketsSent", s.totalPacketsSent},
@@ -49,6 +70,11 @@ namespace nlohmann {
                                  {"throughputMbps", s.throughputMbps}};
         }
 
+        /**
+         * @brief Deserializes a TestStats object from a JSON object.
+         * @param j The JSON object to deserialize from.
+         * @param s The TestStats object to deserialize into.
+         */
         static void from_json(const json& j, TestStats& s) {
             j.at("totalBytesSent").get_to(s.totalBytesSent);
             j.at("totalPacketsSent").get_to(s.totalPacketsSent);
@@ -70,13 +96,20 @@ namespace nlohmann {
  * @brief The header structure that precedes every packet.
  */
 struct PacketHeader {
-    uint16_t startCode;       // A fixed start code (e.g., 0xABCD) to identify the beginning of a packet.
-    uint8_t  senderId;        // The ID of the sender (e.g., 0 for server, 1 for client).
-    uint8_t  receiverId;      // The ID of the receiver.
-    MessageType messageType;  // The type of the message (see MessageType enum).
-    uint32_t packetCounter;   // A sequence number for the packet.
-    uint32_t payloadSize;     // The size of the data (payload) following the header, in bytes.
-    uint32_t checksum;        // A checksum calculated over the payload to verify its integrity.
+    /** @brief A fixed start code (e.g., 0xABCD) to identify the beginning of a packet. */
+    uint16_t startCode;
+    /** @brief The ID of the sender (e.g., 0 for server, 1 for client). */
+    uint8_t  senderId;
+    /** @brief The ID of the receiver. */
+    uint8_t  receiverId;
+    /** @brief The type of the message (see MessageType enum). */
+    MessageType messageType;
+    /** @brief A sequence number for the packet. */
+    uint32_t packetCounter;
+    /** @brief The size of the data (payload) following the header, in bytes. */
+    uint32_t payloadSize;
+    /** @brief A checksum calculated over the payload to verify its integrity. */
+    uint32_t checksum;
 };
 #pragma pack(pop)
 
@@ -108,7 +141,18 @@ inline bool verifyPacket(const PacketHeader& header, const char* payload) {
     return header.checksum == calculateChecksum(payload, header.payloadSize);
 }
 
-// Build deterministic payload used by both client and server for verification
+/**
+ * @brief Builds a deterministic payload for a given packet counter and size.
+ *
+ * This function generates a predictable payload string that can be created by both the
+ * client and server for verification purposes. The payload starts with "Packet X"
+ * where X is the packet counter, and is then padded with '.' characters to reach
+ * the desired payload size.
+ *
+ * @param packetCounter The sequence number of the packet.
+ * @param payloadSize The desired size of the payload in bytes.
+ * @return The generated payload string.
+ */
 inline std::string buildExpectedPayload(uint32_t packetCounter, size_t payloadSize) {
     std::string payload = "Packet " + std::to_string(packetCounter);
     if (payload.size() < payloadSize) payload.resize(payloadSize, '.');

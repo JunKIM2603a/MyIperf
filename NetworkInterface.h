@@ -1,4 +1,4 @@
-﻿// NetworkInterface.h
+// NetworkInterface.h
 #pragma once
 
 #include <string>
@@ -7,23 +7,31 @@
 
 // --- Callback Type Definitions for Asynchronous Operations ---
 
-// Callback for when data is received.
-// @param data: The buffer containing the received data.
-// @param bytesReceived: The number of bytes actually received.
+/**
+ * @brief Callback for when data is received.
+ * @param data The buffer containing the received data.
+ * @param bytesReceived The number of bytes actually received.
+ */
 using RecvCallback = std::function<void(const std::vector<char>& data, size_t bytesReceived)>;
 
-// Callback for when data has been sent.
-// @param bytesSent: The number of bytes successfully sent.
+/**
+ * @brief Callback for when data has been sent.
+ * @param bytesSent The number of bytes successfully sent.
+ */
 using SendCallback = std::function<void(size_t bytesSent)>;
 
-// Callback for when a connection attempt is completed.
-// @param success: True if the connection was successful, false otherwise.
+/**
+ * @brief Callback for when a connection attempt is completed.
+ * @param success True if the connection was successful, false otherwise.
+ */
 using ConnectCallback = std::function<void(bool success)>;
 
-// Callback for when a new client connection is accepted by a server.
-// @param success: True if a client was accepted, false on error.
-// @param clientIP: The IP address of the connected client.
-// @param clientPort: The port of the connected client.
+/**
+ * @brief Callback for when a new client connection is accepted by a server.
+ * @param success True if a client was accepted, false on error.
+ * @param clientIP The IP address of the connected client.
+ * @param clientPort The port of the connected client.
+ */
 using AcceptCallback = std::function<void(bool success, const std::string& clientIP, int clientPort)>;
 
 /**

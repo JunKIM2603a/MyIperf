@@ -1,4 +1,4 @@
-﻿#include "PacketReceiver.h"
+#include "PacketReceiver.h"
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
@@ -7,7 +7,7 @@
  * @brief Constructs the PacketReceiver.
  * @param netInterface Pointer to the network interface to be used for receiving data.
  */
-    PacketReceiver::PacketReceiver(NetworkInterface* netInterface)
+PacketReceiver::PacketReceiver(NetworkInterface* netInterface)
     : networkInterface(netInterface), running(false), currentBytesReceived(0), expectedPacketCounter(0) {}
 
 /**
@@ -19,6 +19,11 @@ void PacketReceiver::start(PacketCallback onPacket) {
     start(onPacket, nullptr);
 }
 
+/**
+ * @brief Starts the packet receiving process with a completion callback.
+ * @param onPacket The callback function to be called for each valid packet received.
+ * @param onComplete The callback function to be called when the receiver stops (e.g., due to a disconnect).
+ */
 void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback onComplete) {
     if (running) {
         Logger::log("Info: PacketReceiver is already running.");
@@ -50,6 +55,10 @@ void PacketReceiver::stop() {
     Logger::log("Info: PacketReceiver stopped.");
 }
 
+/**
+ * @brief Retrieves the current receiver statistics.
+ * @return A TestStats struct containing the latest statistics. This method is thread-safe.
+ */
 TestStats PacketReceiver::getStats() const {
     std::lock_guard<std::mutex> lock(statsMutex); // Lock to ensure thread-safe access to stats.
     TestStats stats;
@@ -68,6 +77,10 @@ TestStats PacketReceiver::getStats() const {
     return stats;
 }
 
+/**
+ * @brief Resets all statistical counters to zero.
+ * This is useful for clearing stats from a previous run without re-creating the object.
+ */
 void PacketReceiver::resetStats() {
     std::lock_guard<std::mutex> lock(statsMutex);
     currentBytesReceived = 0;
@@ -201,4 +214,3 @@ void PacketReceiver::processBuffer() {
         m_receiveBuffer.erase(m_receiveBuffer.begin(), m_receiveBuffer.begin() + totalPacketSize);
     }
 }
-

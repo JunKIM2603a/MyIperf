@@ -1,4 +1,4 @@
-﻿#include "Logger.h"
+#include "Logger.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -40,6 +40,14 @@ void DebugPause(const std::string& message) {
     std::cout.flush();
 }
 
+/**
+ * @brief Manages log file rotation.
+ *
+ * This function checks the number of log files in the log directory for a specific mode
+ * (CLIENT or SERVER) and deletes the oldest ones if the count exceeds a certain limit (e.g., 10).
+ *
+ * @param mode The mode of the logger (e.g., "CLIENT" or "SERVER").
+ */
 void Logger::manageLogRotation(const std::string& mode) {
     if (!std::filesystem::exists(logDirectory)) {
         return;
@@ -67,6 +75,13 @@ void Logger::manageLogRotation(const std::string& mode) {
 }
 
 #ifdef _WIN32
+/**
+ * @brief The main function for the named pipe worker thread.
+ *
+ * This function creates a named pipe and waits for a client to connect.
+ * Once a client is connected, it sends log messages to the pipe.
+ * This is a Windows-specific feature.
+ */
 void Logger::pipeWorker() {
     std::cerr << "Debug: pipeWorker started.\n";
     while (running) {
@@ -129,6 +144,14 @@ void Logger::pipeWorker() {
 }
 #endif
 
+/**
+ * @brief Starts the logger with the given configuration.
+ *
+ * This function initializes the logger, sets up file logging if enabled,
+ * and starts the logger and pipe worker threads.
+ *
+ * @param config The configuration for the logger.
+ */
 void Logger::start(const Config& config) {
     std::cerr << "DEBUG: Entering Logger::start()\n";
     running = true;
@@ -181,6 +204,12 @@ void Logger::start(const Config& config) {
 #endif
 }
 
+/**
+ * @brief Stops the logger and waits for the worker threads to finish.
+ *
+ * This function signals the worker threads to stop, waits for them to join,
+ * and cleans up any resources like file streams.
+ */
 void Logger::stop() {
     Logger::log("Debug: Logger::stop() called.");
     running = false;
@@ -236,6 +265,14 @@ void Logger::stop() {
     Logger::log("Debug: Logger::stop() finished.");
 }
 
+/**
+ * @brief Logs a message.
+ *
+ * This function adds a message to the logger's queue to be processed by the worker thread.
+ * It is thread-safe.
+ *
+ * @param message The message to log.
+ */
 void Logger::log(const std::string& message) {
     if (!running) return;
     {
@@ -245,6 +282,12 @@ void Logger::log(const std::string& message) {
     cv.notify_one();
 }
 
+/**
+ * @brief The main function for the logger worker thread.
+ *
+ * This function runs on a dedicated thread and is responsible for taking messages
+ * from the queue and writing them to the console, file, and named pipe.
+ */
 void Logger::logWorker() {
     std::cerr << "Debug: logWorker started.\n";
     while (true) {
@@ -298,6 +341,15 @@ void Logger::logWorker() {
     // Logger::log("Debug: logWorker finished."); // REMOVED
 }
 
+/**
+ * @brief Writes the final report of the test to the log.
+ *
+ * This function formats and logs the local and remote statistics of the test.
+ *
+ * @param role The role of the current instance (Client or Server).
+ * @param localStats The statistics of the local instance.
+ * @param remoteStats The statistics of the remote instance.
+ */
 void Logger::writeFinalReport(const std::string& role,
                               const TestStats& localStats,
                               const TestStats& remoteStats) {
@@ -328,6 +380,10 @@ void Logger::writeFinalReport(const std::string& role,
     log("================================");
 }
 
+/**
+ * @brief Gets the current time as a formatted string.
+ * @return The current time string in the format "[YYYY-MM-DD HH:MM:SS] ".
+ */
 const std::string Logger::getTimeNow() {
     auto now = std::chrono::system_clock::now();
     std::time_t now_c = std::chrono::system_clock::to_time_t(now);

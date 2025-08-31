@@ -1,4 +1,4 @@
-﻿#include "PacketGenerator.h"
+#include "PacketGenerator.h"
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
@@ -125,6 +125,13 @@ void PacketGenerator::sendNextPacket() {
     });
 }
 
+/**
+ * @brief The main loop for the generator thread.
+ *
+ * This function runs on a dedicated thread and is responsible for sending packets
+ * at the specified interval. It continues to run until the test is stopped or
+ * the configured number of packets has been sent.
+ */
 void PacketGenerator::generatorThreadLoop() {
     Logger::log("Debug: PacketGenerator::generatorThreadLoop started.");
     while (running && shouldContinueSending()) {
@@ -166,6 +173,10 @@ void PacketGenerator::onPacketSent(size_t bytesSent) {
     Logger::log("Debug: PacketGenerator::onPacketSent exited.");
 }
 
+/**
+ * @brief Determines whether the generator should continue sending packets.
+ * @return True if the test duration has not been reached or if the number of packets to send is unlimited, false otherwise.
+ */
 bool PacketGenerator::shouldContinueSending() const {
     const int numPackets = config.getNumPackets();
     if (numPackets == 0) return true; // unlimited
@@ -173,6 +184,10 @@ bool PacketGenerator::shouldContinueSending() const {
     return static_cast<int>(packetCounter) < numPackets;
 }
 
+/**
+ * @brief Retrieves the current generator statistics.
+ * @return A TestStats struct containing the latest statistics. This method is thread-safe.
+ */
 TestStats PacketGenerator::getStats() const {
     TestStats stats;
     stats.totalBytesSent = totalBytesSent.load();

@@ -1,4 +1,4 @@
-﻿#ifdef _WIN32
+#ifdef _WIN32
 #include "WinIOCPNetworkInterface.h"
 #include "Logger.h"
 #include <stdexcept>
@@ -9,7 +9,11 @@
 
 #pragma comment(lib, "Mswsock.lib")
 
-// Helper function to get the error message string from a Windows error code.
+/**
+ * @brief Retrieves the error message string from a Windows error code.
+ * @param errorCode The Windows error code.
+ * @return The error message string.
+ */
 std::string getErrorMessage(DWORD errorCode) {
     if (errorCode == 0) {
         return "No error.";
@@ -342,6 +346,11 @@ void WinIOCPNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback callb
 
 // --- Blocking methods (less preferred, for simple cases) ---
 
+/**
+ * @brief Sends data synchronously.
+ * @param data The data to send.
+ * @return The number of bytes sent, or -1 on error.
+ */
 int WinIOCPNetworkInterface::blockingSend(const std::vector<char>& data) {
     if (clientSocket == INVALID_SOCKET) return -1;
     int bytesSent = send(clientSocket, data.data(), static_cast<int>(data.size()), 0);
@@ -352,6 +361,11 @@ int WinIOCPNetworkInterface::blockingSend(const std::vector<char>& data) {
     return bytesSent;
 }
 
+/**
+ * @brief Receives data synchronously.
+ * @param bufferSize The size of the buffer to receive into.
+ * @return A vector containing the received data. An empty vector indicates an error or closed connection.
+ */
 std::vector<char> WinIOCPNetworkInterface::blockingReceive(size_t bufferSize) {
     if (clientSocket == INVALID_SOCKET) return {};
     std::vector<char> buffer(bufferSize);
@@ -450,6 +464,12 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
     Logger::log("Info: IOCP worker thread stopping.");
 }
 
+/**
+ * @brief Sets up the listening socket for the server.
+ * @param ip The IP address to bind to.
+ * @param port The port to listen on.
+ * @return True if successful, false otherwise.
+ */
 bool WinIOCPNetworkInterface::setupListeningSocket(const std::string& ip, int port) {
     listenSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
     if (listenSocket == INVALID_SOCKET) {

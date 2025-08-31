@@ -10,7 +10,8 @@ Visual Studio 2022 사용
 //# ./IPEFTC --mode server --config server_config.json
 
 cd D:\01_SW2_Project\MyIperf\
-.\build\Debug\IPEFTC.exe --mode server --target 0.0.0.0 --port 5201 --save-logs true
+
+
 .\build\Release\IPEFTC.exe --mode server --target 0.0.0.0 --port 5201 --save-logs true
 
 

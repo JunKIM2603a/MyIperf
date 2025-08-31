@@ -1,4 +1,4 @@
-﻿#include "TestController.h"
+#include "TestController.h"
 #include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
@@ -12,7 +12,11 @@
 #include <string>
 #include <memory>
 
-// Helper function to convert State enum to string for logging
+/**
+ * @brief Converts a State enum to its string representation for logging.
+ * @param state The state to convert.
+ * @return The string representation of the state.
+ */
 const char* stateToString(TestController::State state) {
     switch (state) {
         case TestController::State::IDLE: return "IDLE";
@@ -30,7 +34,11 @@ const char* stateToString(TestController::State state) {
     }
 }
 
-// Helper function to convert MessageType enum to string for logging
+/**
+ * @brief Converts a MessageType enum to its string representation for logging.
+ * @param type The message type to convert.
+ * @return The string representation of the message type.
+ */
 const char* MessageTypeToString(MessageType type) {
     switch (type) {
         case MessageType::CONFIG_HANDSHAKE: return "CONFIG_HANDSHAKE";
@@ -146,6 +154,11 @@ void TestController::transitionTo(State newState) {
     transitionTo_nolock(newState);
 }
 
+/**
+ * @brief The actual implementation of the state transition.
+ * This function is NOT thread-safe and must be called only when the state machine mutex is already held.
+ * @param newState The state to transition to.
+ */
 void TestController::transitionTo_nolock(State newState) {
     currentState = newState;
     Logger::log("Info: Transitioning to state: " + std::string(stateToString(newState)));
@@ -439,11 +452,22 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
     }
 }
 
+/**
+ * @brief Callback for when the PacketGenerator has completed its sending duration.
+ * This function is called on the client side when the test duration is over.
+ */
 void TestController::onTestCompleted() {
     Logger::log("Info: Data transmission completed.");
     transitionTo(State::EXCHANGING_STATS);
 }
 
+/**
+ * @brief Sends client-side statistics to the server and waits for acknowledgment.
+ *
+ * This function is called on the client side after the main data transfer is complete.
+ * It sends a final statistics packet to the server and then waits for a corresponding
+ * acknowledgment from the server to ensure the stats were received.
+ */
 void TestController::sendClientStatsAndAwaitAck() {
     using json = nlohmann::json;
     TestStats clientStats = packetGenerator->getStats();
