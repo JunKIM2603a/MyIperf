@@ -1,4 +1,4 @@
-#ifdef _WIN32
+﻿#ifdef _WIN32
 #include "WinIOCPNetworkInterface.h"
 #include "Logger.h"
 #include <stdexcept>
@@ -208,7 +208,7 @@ void WinIOCPNetworkInterface::asyncConnect(const std::string& ip, int port, Conn
 
     sockaddr_in service;
     service.sin_family = AF_INET;
-    InetPton(AF_INET, ip.c_str(), &service.sin_addr);
+    InetPtonA(AF_INET, ip.c_str(), &service.sin_addr);
     service.sin_port = htons(port);
 
     // Initiate the asynchronous connection.
@@ -396,6 +396,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
         IO_DATA* ioData = (IO_DATA*)lpOverlapped;
 
         if (ioData == NULL) { // Shutdown signal
+            Logger::log("Info: IOCP worker thread received shutdown signal.");
             continue;
         }
 
@@ -440,7 +441,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                         int addrLen = sizeof(addr);
                         getpeername(ioData->clientSocket, (SOCKADDR*)&addr, &addrLen);
                         char clientIp[INET_ADDRSTRLEN];
-                        InetNtop(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
+                        InetNtopA(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
                         Logger::log("Info: Client connection accepted from " + std::string(clientIp) + ":" + std::to_string(ntohs(addr.sin_port)));
                         ioData->acceptCallback(true, clientIp, ntohs(addr.sin_port));
                     }
@@ -480,7 +481,7 @@ bool WinIOCPNetworkInterface::setupListeningSocket(const std::string& ip, int po
 
     sockaddr_in service;
     service.sin_family = AF_INET;
-    InetPton(AF_INET, ip.c_str(), &service.sin_addr);
+    InetPtonA(AF_INET, ip.c_str(), &service.sin_addr);
     service.sin_port = htons(port);
 
     if (bind(listenSocket, (SOCKADDR*)&service, sizeof(service)) == SOCKET_ERROR) {

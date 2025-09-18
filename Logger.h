@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <string>
 #include <iostream>
@@ -34,13 +34,24 @@ void DebugPause(const std::string& message = "Press Enter to continue...");
  * @param ... The variable arguments.
  * @return The formatted string.
  */
-inline std::string string_format(const char* fmt, ...);
-
-/**
- * @brief Logs an error message to the standard error stream.
- * @param msg The error message to log.
- */
-inline void logError(const std::string& msg);
+inline std::string string_format(const char* fmt, ...) {
+    int size = 1024;
+    std::vector<char> buffer(size);
+    va_list args;
+    va_start(args, fmt);
+    int needed = vsnprintf(buffer.data(), size, fmt, args);
+    va_end(args);
+    if (needed >= 0 && needed < size) {
+        return std::string(buffer.data());
+    }
+    
+    size = needed > 0 ? needed + 1 : size * 2;
+    buffer.resize(size);
+    va_start(args, fmt);
+    vsnprintf(buffer.data(), size, fmt, args);
+    va_end(args);
+    return std::string(buffer.data());
+}
 
 /**
  * @brief A custom assertion function that logs detailed information before aborting.

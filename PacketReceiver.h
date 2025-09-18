@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "NetworkInterface.h"
 #include "Protocol.h"
@@ -40,7 +40,7 @@ public:
     /**
      * @brief Destroys the PacketReceiver object.
      */
-    ~PacketReceiver();
+    ~PacketReceiver() {};
 
     /**
      * @brief Starts the packet receiving process.

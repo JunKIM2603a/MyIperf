@@ -13,7 +13,7 @@ cd D:\01_SW2_Project\MyIperf\
 
 
 .\build\Release\IPEFTC.exe --mode server --target 0.0.0.0 --port 5201 --save-logs true
-
+.\build\Debug\IPEFTC.exe --mode server --target 0.0.0.0 --port 5201 --save-logs true
 
 ---
 

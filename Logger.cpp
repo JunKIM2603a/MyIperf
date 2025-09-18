@@ -1,4 +1,4 @@
-#include "Logger.h"
+﻿#include "Logger.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -93,7 +93,7 @@ void Logger::pipeWorker() {
         }
 
         std::cerr << "Debug: pipeWorker - Creating named pipe.\n";
-        hPipe = CreateNamedPipe(
+        hPipe = CreateNamedPipeA(
             pipeName.c_str(),
             PIPE_ACCESS_OUTBOUND,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
@@ -104,7 +104,7 @@ void Logger::pipeWorker() {
             NULL);
 
         if (hPipe == INVALID_HANDLE_VALUE) {
-            logError("Could not create named pipe. Error: " + std::to_string(GetLastError()));
+            log("Error: Could not create named pipe. Error: " + std::to_string(GetLastError()));
             std::cerr << "Debug: pipeWorker - CreateNamedPipe failed, sleeping.\n";
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
@@ -193,7 +193,7 @@ void Logger::start(const Config& config) {
         name << ".log";
         logStream.open(name.str(), std::ios::out | std::ios::app);
         if (!logStream.is_open()) {
-            logError("Failed to open log file: " + name.str());
+            log("Error: Failed to open log file: " + name.str());
             saveToFile = false; // Disable file logging if open failed
         }
     }
@@ -222,7 +222,7 @@ void Logger::stop() {
     Logger::log("Debug: Logger::stop() - Attempting to unblock pipeThread.");
     if (!pipeName.empty()) {
         // Create a dummy client to unblock ConnectNamedPipe
-        HANDLE hDummyPipe = CreateFile(
+        HANDLE hDummyPipe = CreateFileA(
             pipeName.c_str(),
             GENERIC_WRITE,
             0,

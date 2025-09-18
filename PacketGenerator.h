@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "NetworkInterface.h"
 #include "Protocol.h"
@@ -33,7 +33,7 @@ public:
     /**
      * @brief Destroys the PacketGenerator object.
      */
-    ~PacketGenerator();
+    ~PacketGenerator() {};
 
     /**
      * @brief Starts the packet generation and sending process.
