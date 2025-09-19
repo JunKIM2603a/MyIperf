@@ -99,7 +99,9 @@ private:
     /**< Flag to control the receiver's running state. */
     std::atomic<bool> running;
     /**< Timestamp for when the receiver was started. */
-    std::chrono::high_resolution_clock::time_point startTime;
+    std::chrono::steady_clock::time_point m_startTime;
+    /**< Timestamp for when the generator should stop. */
+    std::chrono::steady_clock::time_point m_endTime;
 
     /**< Atomically updated count of total bytes received. */
     std::atomic<long long> currentBytesReceived;
