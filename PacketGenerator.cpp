@@ -38,7 +38,8 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     totalPacketsSent = 0;
     packetCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
-    
+    memset(&m_LastStats, 0, sizeof(TestStats));
+
     // Prepare the reusable packet template
     preparePacketTemplate();
 
@@ -188,7 +189,7 @@ bool PacketGenerator::shouldContinueSending() const {
  * @brief Retrieves the current generator statistics.
  * @return A TestStats struct containing the latest statistics. This method is thread-safe.
  */
-TestStats PacketGenerator::getStats() const {
+TestStats PacketGenerator::getStats() {
     TestStats stats;
     stats.totalBytesSent = totalBytesSent.load();
     stats.totalPacketsSent = totalPacketsSent.load();
@@ -201,4 +202,12 @@ TestStats PacketGenerator::getStats() const {
     }
     // Received stats, checksum errors, sequence errors are not applicable for generator, so they remain 0 (default initialized)
     return stats;
+}
+
+void PacketGenerator::saveLastStats(const TestStats& Stats) {
+    memcpy_s(&m_LastStats, sizeof(TestStats), &Stats, sizeof(TestStats));
+}
+
+TestStats PacketGenerator::lastStats() const{
+    return m_LastStats;
 }

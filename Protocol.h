@@ -13,7 +13,8 @@ enum class MessageType : uint8_t {
     CONFIG_ACK       = 1, // Sent by the server to the client to acknowledge configuration.
     DATA_PACKET      = 2, // A data packet used for the performance test.
     STATS_EXCHANGE   = 3, // Sent after the test to exchange performance statistics.
-    STATS_ACK        = 4  // An acknowledgment of receiving statistics.
+    STATS_ACK        = 4, // An acknowledgment of receiving statistics.
+    TEST_FIN         = 5  // Sent by either side to signal completion of the test phase.
 };
 
 /**

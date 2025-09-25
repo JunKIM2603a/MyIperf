@@ -53,8 +53,10 @@ public:
      * @brief Retrieves the current generator statistics.
      * @return A TestStats struct containing the latest statistics. This method is thread-safe.
      */
-    TestStats getStats() const;
-
+    TestStats getStats();
+    TestStats lastStats() const;
+    void saveLastStats(const TestStats& Stats);
+    
 private:
     // Private methods for internal operation
 
@@ -117,4 +119,6 @@ private:
     std::chrono::steady_clock::time_point m_startTime;
     /**< Timestamp for when the generator should stop. */
     std::chrono::steady_clock::time_point m_endTime;
+
+    TestStats m_LastStats;
 };

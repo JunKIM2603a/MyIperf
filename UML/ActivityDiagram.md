@@ -1,38 +1,135 @@
+# MyIperf 동작 흐름 (Activity Diagram & State Diagram)
+
+이 문서는 `MyIperf` 프로그램이 테스트를 수행하는 전체적인 과정과 내부 상태 변화를 설명합니다.
+
+## 1. 전체 동작 흐름 (Activity Diagram)
+
+아래 다이어그램은 사용자가 `MyIperf`를 실행하는 시점부터 테스트가 완료되기까지 서버와 클라이언트에서 일어나는 일련의 활동들을 순서대로 보여줍니다.
+
 ```mermaid
 graph TD
-    StartTest("startTest 호출") --> CheckMode{"클라이언트/서버 모드?"};
-    
-    %% Client Path
-    CheckMode -- "클라이언트" --> ClientRunTest["runClientTest"];
-    ClientRunTest --> ClientInitNI["NetworkInterface 초기화"];
-    ClientInitNI --> ClientAsyncConnect["asyncConnect 호출"];
-    ClientAsyncConnect --> ClientOnConnected["onClientConnected 콜백 수신"];
-    ClientOnConnected --> ClientSendConfig["Config 데이터 전송 (asyncSend)"];
-    ClientSendConfig --> ClientOnConfigSent["onConfigSent 콜백 수신"];
-    ClientOnConfigSent --> ClientAwaitResponse["서버 응답 대기 (asyncReceive)"];
-    ClientAwaitResponse --> ClientOnResponse["onServerSetupResponse 콜백 수신"];
-    ClientOnResponse --> ClientCheckResponse{"서버 응답 'S' 확인"};
-    ClientCheckResponse -- "예" --> ClientStartGenerator["PacketGenerator 시작"];
-    ClientCheckResponse -- "아니오" --> EndTest["테스트 종료"];
-    
-    ClientStartGenerator --> ClientSendLoop("비동기 전송 루프 시작");
-    ClientSendLoop -- "전송 완료 콜백" --> ClientCheckDuration{"테스트 시간 종료?"};
-    ClientCheckDuration -- "아니오" --> ClientSendLoop;
-    ClientCheckDuration -- "예" --> ClientStopTest["stopTest 호출"];
-    ClientStopTest --> ClientLogResults["결과 기록 및 출력"];
-    ClientLogResults --> EndTest;
+    subgraph "사용자"
+        A(ipeftc 실행<br>-s 또는 -c 옵션)
+    end
 
-    %% Server Path
-    CheckMode -- "서버" --> ServerRunTest["runServerTest"];
-    ServerRunTest --> ServerInitNI["NetworkInterface 초기화"];
-    ServerInitNI --> ServerAsyncAccept["asyncAccept 호출"];
-    ServerAsyncAccept --> ServerOnAccepted["onServerAccepted 콜백 수신"];
-    ServerOnAccepted --> ServerReceiveConfig["Config 데이터 수신 (asyncReceive)"];
-    ServerReceiveConfig --> ServerOnConfigReceived["onConfigReceived 콜백 수신"];
-    ServerOnConfigReceived --> ServerStartReceiver["PacketReceiver 시작"];
-    ServerStartReceiver --> ServerSendReadyResponse["서버 준비 완료 응답 전송"];
-    ServerSendReadyResponse --> ServerReceiveLoop("비동기 수신 루프 시작");
-    ServerReceiveLoop -- "수신 완료 콜백" --> ServerCheckConnectionClosed{"연결 종료? (0 bytes)"};
-    ServerCheckConnectionClosed -- "아니오" --> ServerReceiveLoop;
-    ServerCheckConnectionClosed -- "예" --> EndTest;
+    subgraph "서버 프로세스"
+        B[테스트 컨트롤러 생성]
+        C{테스트 시작}
+        D[리슨 소켓 생성 및 Accept 대기]
+        E[클라이언트 연결 수락]
+        F[설정 정보 수신]
+        G[설정 ACK 전송]
+        H[테스트 데이터 수신]
+        I(TEST_FIN 메시지 수신)
+        J[결과 통계 전송]
+        K[통계 ACK 수신]
+        L[테스트 종료]
+    end
+
+    subgraph "클라이언트 프로세스"
+        M[테스트 컨트롤러 생성]
+        N{테스트 시작}
+        O[서버에 연결 시도]
+        P[연결 성공]
+        Q[설정 정보 전송]
+        R[설정 ACK 수신]
+        S[테스트 데이터 전송]
+        T(테스트 시간 종료)
+        U[TEST_FIN 메시지 전송]
+        V[결과 통계 수신]
+        W[통계 ACK 전송]
+        X[테스트 종료]
+    end
+
+    A --> B & M
+    B --> C
+    M --> N
+    C --> D
+    N --> O
+    O --> P
+    D --> E
+    P --> Q
+    E --> F
+    Q --> R
+    F --> G
+    R --> S
+    G --> H
+    S --> T
+    H --> I
+    T --> U
+    I --> J
+    U --> V
+    J --> K
+    V --> W
+    K & W --> L & X
 ```
+
+### 설명
+
+1.  **실행**: 사용자가 서버(`-s`) 또는 클라이언트(`-c`) 옵션으로 프로그램을 실행합니다.
+2.  **테스트 준비**:
+    *   **서버**: 클라이언트의 연결을 기다립니다 (`Accept`).
+    *   **클라이언트**: 서버에 연결을 시도합니다 (`Connect`).
+3.  **설정 교환**:
+    *   클라이언트가 연결에 성공하면, 테스트 설정을 서버에 전송합니다.
+    *   서버는 설정을 받은 후 클라이언트에게 확인(ACK) 응답을 보냅니다.
+4.  **테스트 진행**:
+    *   클라이언트는 설정된 시간 동안 서버로 테스트 데이터 패킷을 전송합니다.
+    *   서버는 해당 패킷들을 수신합니다.
+5.  **테스트 종료 및 결과 교환**:
+    *   **클라이언트**: 테스트 시간이 만료되면 `TEST_FIN` 메시지를 보내 테스트 종료를 알립니다.
+    *   **서버**: `TEST_FIN`을 받으면, 수신한 데이터 통계를 클라이언트에 전송합니다.
+    *   **클라이언트**: 서버로부터 통계를 받은 후, 최종 확인(ACK)을 보냅니다.
+6.  **완료**: 양측 모두 연결을 종료하고 프로그램을 마칩니다.
+
+## 2. TestController 상태 변화 (State Diagram)
+
+아래 다이어그램은 `TestController` 내부의 상태가 특정 이벤트에 따라 어떻게 변화하는지를 보여주는 상태 머신 다이어그램입니다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> 대기
+
+    대기 --> 연결중: startTest(클라이언트)
+    대기 --> 수락대기: startTest(서버)
+
+    연결중 --> 설정전송중: 연결 성공
+    설정전송중 --> ACK대기: 설정 전송 완료
+    ACK대기 --> 테스트진행중: ACK 수신
+
+    수락대기 --> 설정수신대기: 클라이언트 연결됨
+    설정수신대기 --> 테스트진행중: 설정 수신, ACK 전송
+
+    테스트진행중 --> 종료처리중: 테스트 시간 종료 (클라이언트)
+    테스트진행중 --> 종료처리중: TEST_FIN 수신 (서버)
+
+    종료처리중 --> 통계교환중: TEST_FIN 수신 (클라이언트)
+    종료처리중 --> 완료: STATS_ACK 전송 (서버)
+
+    통계교환중 --> 완료: STATS_ACK 수신 (클라이언트)
+
+    연결중 --> 오류: 연결 실패
+    설정전송중 --> 오류: 전송 실패
+    ACK대기 --> 오류: 타임아웃 / 에러
+    설정수신대기 --> 오류: 잘못된 설정
+    테스트진행중 --> 오류: I/O 에러
+    종료처리중 --> 오류: I/O 에러
+    통계교환중 --> 오류: I/O 에러
+
+    오류 --> [*]
+    완료 --> [*]
+```
+
+### 상태 설명
+
+*   **대기 (IDLE)**: 프로그램이 시작되고 명령을 기다리는 초기 상태입니다.
+*   **연결중 (CONNECTING)**: 클라이언트가 서버에 연결을 시도하는 상태입니다.
+*   **수락대기 (ACCEPTING)**: 서버가 클라이언트의 연결을 기다리는 상태입니다.
+*   **설정전송중 (SENDING_CONFIG)**: 클라이언트가 서버로 테스트 설정을 보내는 상태입니다.
+*   **ACK대기 (WAITING_FOR_ACK)**: 클라이언트가 서버의 설정 확인(ACK)을 기다리는 상태입니다.
+*   **설정수신대기 (WAITING_FOR_CONFIG)**: 서버가 클라이언트로부터 설정을 기다리는 상태입니다.
+*   **테스트진행중 (RUNNING_TEST)**: 실제 데이터 패킷을 주고받는 테스트가 진행되는 상태입니다.
+*   **종료처리중 (FINISHING)**: 테스트 시간이 만료되거나 종료 메시지를 받아 마무리를 시작하는 상태입니다.
+*   **통계교환중 (EXCHANGING_STATS)**: 클라이언트와 서버가 최종 테스트 통계를 교환하는 상태입니다.
+*   **완료 (FINISHED)**: 모든 과정이 정상적으로 끝나고 테스트가 종료된 상태입니다.
+*   **오류 (ERRORED)**: 과정 중 문제가 발생하여 테스트가 비정상적으로 종료된 상태입니다.

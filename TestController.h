@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Config.h"
 #include "NetworkInterface.h"
@@ -39,6 +39,7 @@ public:
         WAITING_FOR_CONFIG, // Server is waiting for the client's configuration.
         // Common states for both client and server
         RUNNING_TEST,       // The data transfer phase of the test is active.
+        FINISHING,          // Handshake to confirm test completion before exchanging stats.
         EXCHANGING_STATS,   // Exchanging final statistics
         FINISHED,           // The test has completed successfully.
         ERRORED             // An unrecoverable error occurred.
@@ -53,6 +54,8 @@ public:
      * @brief Destroys the TestController object.
      */
     ~TestController();
+
+    nlohmann::json parseStats(const std::vector<char>& payload) const;
 
     /**
      * @brief Starts a new test with the given configuration.
