@@ -7,7 +7,7 @@
  * @brief Constructs the PacketReceiver.
  * @param netInterface Pointer to the network interface to be used for receiving data.
  */
-    PacketReceiver::PacketReceiver(NetworkInterface* netInterface)
+PacketReceiver::PacketReceiver(NetworkInterface* netInterface)
     : networkInterface(netInterface), running(false), currentBytesReceived(0), expectedPacketCounter(0) {}
 
 /**
@@ -19,6 +19,11 @@ void PacketReceiver::start(PacketCallback onPacket) {
     start(onPacket, nullptr);
 }
 
+/**
+ * @brief Starts the packet receiving process with a completion callback.
+ * @param onPacket The callback function to be called for each valid packet received.
+ * @param onComplete The callback function to be called when the receiver stops (e.g., due to a disconnect).
+ */
 void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback onComplete) {
     if (running) {
         Logger::log("Info: PacketReceiver is already running.");
@@ -31,7 +36,7 @@ void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback o
     currentBytesReceived = 0;
     m_receiveBuffer.clear();
     expectedPacketCounter = 0;
-    startTime = std::chrono::high_resolution_clock::now();
+    m_startTime = std::chrono::steady_clock::now();
     packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
 
     Logger::log("Info: PacketReceiver started.");
@@ -50,24 +55,34 @@ void PacketReceiver::stop() {
     Logger::log("Info: PacketReceiver stopped.");
 }
 
+/**
+ * @brief Retrieves the current receiver statistics.
+ * @return A TestStats struct containing the latest statistics. This method is thread-safe.
+ */
 TestStats PacketReceiver::getStats() const {
     std::lock_guard<std::mutex> lock(statsMutex); // Lock to ensure thread-safe access to stats.
     TestStats stats;
-    stats.totalBytesReceived = currentBytesReceived;
-    stats.duration = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - startTime).count();
-    
-    // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
-    double duration_seconds = stats.duration;
-    if (duration_seconds > 0) {
-        stats.throughputMbps = (static_cast<double>(stats.totalBytesReceived) * 8.0) / duration_seconds / 1'000'000.0;
-    }
     stats.totalPacketsReceived = m_totalPacketsReceived.load();
     stats.failedChecksumCount = m_failedChecksumCount.load();
     stats.sequenceErrorCount = m_sequenceErrorCount.load();
+
+    stats.totalBytesReceived = currentBytesReceived;
+    if (m_endTime > m_startTime) {
+        stats.duration = std::chrono::duration<double>(m_endTime - m_startTime).count();
+        if (stats.duration > 0) {
+            // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
+            stats.throughputMbps = (static_cast<double>(stats.totalBytesReceived) * 8.0) / stats.duration / 1'000'000.0;
+        }
+    }
+
     // Sent stats are not applicable for receiver, so they remain 0 (default initialized)
     return stats;
 }
 
+/**
+ * @brief Resets all statistical counters to zero.
+ * This is useful for clearing stats from a previous run without re-creating the object.
+ */
 void PacketReceiver::resetStats() {
     std::lock_guard<std::mutex> lock(statsMutex);
     currentBytesReceived = 0;
@@ -75,7 +90,8 @@ void PacketReceiver::resetStats() {
     m_failedChecksumCount = 0;
     m_sequenceErrorCount = 0;
     expectedPacketCounter = 0;
-    startTime = std::chrono::high_resolution_clock::now();
+    m_startTime = std::chrono::steady_clock::now();
+    m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketReceiver statistics have been reset.");
 }
 
@@ -172,6 +188,9 @@ void PacketReceiver::processBuffer() {
             if (onPacketCallback) {
                 Logger::log("Debug: PacketReceiver::processBuffer - Dispatching packet. Message Type: " + std::to_string(static_cast<int>(header->messageType)) + ", Packet Counter: " + std::to_string(header->packetCounter)
                 + ", payloadSize: " + std::to_string(header->payloadSize));
+                if(header->messageType == MessageType::DATA_PACKET){
+                    m_endTime = std::chrono::steady_clock::now(); 
+                }
                 onPacketCallback(*header, payload_vec);
             }
             // Safely update stats under a lock.
@@ -201,4 +220,3 @@ void PacketReceiver::processBuffer() {
         m_receiveBuffer.erase(m_receiveBuffer.begin(), m_receiveBuffer.begin() + totalPacketSize);
     }
 }
-

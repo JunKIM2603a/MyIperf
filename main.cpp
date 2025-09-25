@@ -1,9 +1,13 @@
-﻿#include "CLIHandler.h"
+#include "CLIHandler.h"
 #include "TestController.h"
 #include "Logger.h"
 
 /**
  * @brief The main entry point for the IPEFTC application.
+ *
+ * This function initializes the application, parses command-line arguments,
+ * starts the appropriate test (client or server), and waits for the test
+ * to complete before shutting down.
  *
  * @param argc The number of command-line arguments.
  * @param argv An array of command-line argument strings.

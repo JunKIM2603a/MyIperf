@@ -15,6 +15,9 @@
  * @param payload The payload data of the received packet.
  */
 using PacketCallback = std::function<void(const PacketHeader&, const std::vector<char>&)>;
+/**
+ * @brief Defines a callback function type that is invoked when the receiver completes its operation.
+ */
 using ReceiverCompletionCallback = std::function<void()>;
 
 /**
@@ -35,10 +38,21 @@ public:
     PacketReceiver(NetworkInterface* netInterface);
 
     /**
+     * @brief Destroys the PacketReceiver object.
+     */
+    ~PacketReceiver() {};
+
+    /**
      * @brief Starts the packet receiving process.
      * @param onPacket The callback function to be called for each valid packet received.
      */
     void start(PacketCallback onPacket);
+
+    /**
+     * @brief Starts the packet receiving process with a completion callback.
+     * @param onPacket The callback function to be called for each valid packet received.
+     * @param onComplete The callback function to be called when the receiver stops (e.g., due to a disconnect).
+     */
     void start(PacketCallback onPacket, ReceiverCompletionCallback onComplete);
 
     /**
@@ -80,20 +94,35 @@ private:
 
     // Member variables
 
-    NetworkInterface* networkInterface;     // The network interface for data reception.
-    std::atomic<bool> running;              // Flag to control the receiver's running state.
-    std::chrono::high_resolution_clock::time_point startTime; // Timestamp for when the receiver was started.
+    /**< The network interface for data reception. */
+    NetworkInterface* networkInterface;
+    /**< Flag to control the receiver's running state. */
+    std::atomic<bool> running;
+    /**< Timestamp for when the receiver was started. */
+    std::chrono::steady_clock::time_point m_startTime;
+    /**< Timestamp for when the generator should stop. */
+    std::chrono::steady_clock::time_point m_endTime;
 
-    std::atomic<long long> currentBytesReceived; // Atomically updated count of total bytes received.
-    mutable std::mutex statsMutex;          // Mutex to protect access to the statistics. `mutable` allows locking in const methods.
-    int packetBufferSize;                   // The size of the buffer for each network receive operation.
-    std::vector<char> m_receiveBuffer;      // Internal buffer to assemble packets from the incoming data stream.
-    PacketCallback onPacketCallback;        // The callback function to invoke for valid packets.
-    ReceiverCompletionCallback onCompleteCallback; // Called when receiver stops due to disconnect.
-    uint32_t expectedPacketCounter;         // Counter to track the sequence of incoming packets.
+    /**< Atomically updated count of total bytes received. */
+    std::atomic<long long> currentBytesReceived;
+    /**< Mutex to protect access to the statistics. `mutable` allows locking in const methods. */
+    mutable std::mutex statsMutex;
+    /**< The size of the buffer for each network receive operation. */
+    int packetBufferSize;
+    /**< Internal buffer to assemble packets from the incoming data stream. */
+    std::vector<char> m_receiveBuffer;
+    /**< The callback function to invoke for valid packets. */
+    PacketCallback onPacketCallback;
+    /**< Called when receiver stops due to disconnect. */
+    ReceiverCompletionCallback onCompleteCallback;
+    /**< Counter to track the sequence of incoming packets. */
+    uint32_t expectedPacketCounter;
 
-    // Stats counters
+    // --- Statistics Counters ---
+    /**< Total number of valid packets received. */
     std::atomic<long long> m_totalPacketsReceived{0};
+    /**< Number of packets that failed checksum validation. */
     std::atomic<long long> m_failedChecksumCount{0};
+    /**< Number of packets received out of sequence. */
     std::atomic<long long> m_sequenceErrorCount{0};
 };

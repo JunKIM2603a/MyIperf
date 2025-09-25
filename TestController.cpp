@@ -1,4 +1,4 @@
-﻿#include "TestController.h"
+#include "TestController.h"
 #include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
@@ -9,8 +9,14 @@
 #include "nlohmann/json.hpp"
 #include <cstring>
 #include <thread>
+#include <string>
+#include <memory>
 
-// Helper function to convert State enum to string for logging
+/**
+ * @brief Converts a State enum to its string representation for logging.
+ * @param state The state to convert.
+ * @return The string representation of the state.
+ */
 const char* stateToString(TestController::State state) {
     switch (state) {
         case TestController::State::IDLE: return "IDLE";
@@ -21,6 +27,7 @@ const char* stateToString(TestController::State state) {
         case TestController::State::ACCEPTING: return "ACCEPTING";
         case TestController::State::WAITING_FOR_CONFIG: return "WAITING_FOR_CONFIG";
         case TestController::State::RUNNING_TEST: return "RUNNING_TEST";
+        case TestController::State::FINISHING: return "FINISHING";
         case TestController::State::EXCHANGING_STATS: return "EXCHANGING_STATS";
         case TestController::State::FINISHED: return "FINISHED";
         case TestController::State::ERRORED: return "ERRORED";
@@ -28,7 +35,11 @@ const char* stateToString(TestController::State state) {
     }
 }
 
-// Helper function to convert MessageType enum to string for logging
+/**
+ * @brief Converts a MessageType enum to its string representation for logging.
+ * @param type The message type to convert.
+ * @return The string representation of the message type.
+ */
 const char* MessageTypeToString(MessageType type) {
     switch (type) {
         case MessageType::CONFIG_HANDSHAKE: return "CONFIG_HANDSHAKE";
@@ -36,6 +47,7 @@ const char* MessageTypeToString(MessageType type) {
         case MessageType::DATA_PACKET: return "DATA_PACKET";
         case MessageType::STATS_EXCHANGE: return "STATS_EXCHANGE";
         case MessageType::STATS_ACK: return "STATS_ACK";
+        case MessageType::TEST_FIN: return "TEST_FIN";
         default: return "UNKNOWN";
     }
 }
@@ -44,7 +56,7 @@ const char* MessageTypeToString(MessageType type) {
  * @brief Constructs the TestController.
  * Initializes network interface, generator, receiver, and the state timeout timer.
  */
-TestController::TestController() : currentState(State::IDLE), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
+TestController::TestController() : currentState(State::IDLE), m_stopped(false), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
     std::cerr << "DEBUG: Entering TestController::TestController()\n";
     std::cerr << "DEBUG: TestController::TestController() - Before networkInterface creation.\n"; // NEW LOG
     // Select the appropriate network interface based on the operating system.
@@ -66,6 +78,11 @@ TestController::TestController() : currentState(State::IDLE), m_expectedDataPack
  */
 TestController::~TestController() {
     stopTest();
+}
+
+nlohmann::json TestController::parseStats(const std::vector<char>& payload) const {
+    std::string stats_str(payload.begin(), payload.end());
+    return nlohmann::json::parse(stats_str);
 }
 
 /**
@@ -124,15 +141,12 @@ void TestController::stopTest() {
     Logger::log("Info: Stopping the test components.");
     Logger::log("Debug: Calling packetGenerator->stop().");
     packetGenerator->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: packetGenerator->stop() completed.");
     Logger::log("Debug: Calling packetReceiver->stop().");
     packetReceiver->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: packetReceiver->stop() completed.");
     Logger::log("Debug: Calling networkInterface->close().");
     networkInterface->close();
-    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // ADDED DELAY
     Logger::log("Debug: networkInterface->close() completed.");
     Logger::log("Debug: TestController::stopTest() finished.");
 }
@@ -147,6 +161,11 @@ void TestController::transitionTo(State newState) {
     transitionTo_nolock(newState);
 }
 
+/**
+ * @brief The actual implementation of the state transition.
+ * This function is NOT thread-safe and must be called only when the state machine mutex is already held.
+ * @param newState The state to transition to.
+ */
 void TestController::transitionTo_nolock(State newState) {
     currentState = newState;
     Logger::log("Info: Transitioning to state: " + std::string(stateToString(newState)));
@@ -252,6 +271,29 @@ void TestController::transitionTo_nolock(State newState) {
             }
             break;
         }
+        case State::FINISHING: {
+            Logger::log("Info: Initiating test completion handshake.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
+
+            PacketHeader header{};
+            header.startCode = PROTOCOL_START_CODE;
+            header.messageType = MessageType::TEST_FIN;
+            header.payloadSize = 0;
+            header.checksum = 0;
+
+            std::vector<char> packet(sizeof(PacketHeader));
+            std::memcpy(packet.data(), &header, sizeof(PacketHeader));
+
+            networkInterface->asyncSend(packet, [this](size_t bytesSent) {
+                if (bytesSent > 0) {
+                    Logger::log("Info: Sent TEST_FIN successfully.");
+                } else {
+                    Logger::log("Error: Failed to send TEST_FIN.");
+                    transitionTo_nolock(State::ERRORED);
+                }
+            });
+            break;
+        }
         case State::EXCHANGING_STATS: {
             Logger::log("Info: Client initiating statistics exchange.");
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
@@ -268,7 +310,11 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            stopTest(); // Stop components before signaling completion
+            // The call to stopTest() is removed from here to prevent deadlocks.
+            // The worker thread, which calls this transition, cannot join itself.
+            // The main thread, after being unblocked by the promise, is now responsible
+            // for calling stopTest() to clean up resources.
+            // stopTest();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
@@ -291,7 +337,11 @@ void TestController::transitionTo_nolock(State newState) {
                 TestStats localStats = packetReceiver->getStats();
                 Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
             }
-            stopTest(); // Stop components before signaling completion
+            // The call to stopTest() is removed from here to prevent deadlocks.
+            // The worker thread, which calls this transition, cannot join itself.
+            // The main thread, after being unblocked by the promise, is now responsible
+            // for calling stopTest() to clean up resources.
+            // stopTest();
             if (!testCompletionPromise_set) {
                 testCompletionPromise.set_value();
                 testCompletionPromise_set = true;
@@ -352,45 +402,56 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     }
                 }
                 break;
-            case MessageType::STATS_EXCHANGE: {
-                Logger::log("Info: Server received STATS_EXCHANGE from client.");
+            case MessageType::TEST_FIN:
                 DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
-                
-                // Parse client's full stats and store them as remote stats
-                try {
+                if (currentState == State::RUNNING_TEST) {
+                    Logger::log("Info: Server received TEST_FIN from client. Replying and finishing.");
+                    transitionTo_nolock(State::FINISHING);
+                }
+                break;
+            case MessageType::STATS_EXCHANGE: {
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
+                if (currentState == State::FINISHING) {
+                    Logger::log("Info: Server received STATS_EXCHANGE from client.");
+                    
+                    // Parse client's full stats and store them as remote stats
+                    try {
+                        nlohmann::json stats_payload = parseStats(payload);
+                        m_remoteStats = stats_payload.get<TestStats>();
+                        Logger::log("Info: Client Stats: " + stats_payload.dump());
+                    } catch(const std::exception& e) {
+                        Logger::log("Warning: Could not parse client stats: " + std::string(e.what()));
+                    }
+
+                    // Send server stats back to client
+                    TestStats serverStats = packetReceiver->getStats();
                     using json = nlohmann::json;
-                    std::string stats_str(payload.begin(), payload.end());
-                    json stats_payload = json::parse(stats_str);
-                    m_remoteStats = stats_payload.get<TestStats>();
-                    Logger::log("Info: Client Stats: " + stats_payload.dump());
-                } catch(const std::exception& e) {
-                    Logger::log("Warning: Could not parse client stats: " + std::string(e.what()));
+                    json ack_payload = serverStats; // Use the to_json function implicitly
+                    std::string ack_payload_str = ack_payload.dump();
+                    
+                    std::vector<char> payload_data(ack_payload_str.begin(), ack_payload_str.end());
+
+                    PacketHeader ackHeader{};
+                    ackHeader.startCode = PROTOCOL_START_CODE;
+                    ackHeader.messageType = MessageType::STATS_ACK;
+                    ackHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
+                    ackHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
+
+                    std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
+                    std::memcpy(packet.data(), &ackHeader, sizeof(PacketHeader));
+                    if (!payload_data.empty()) {
+                        std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
+                    }
+
+                    networkInterface->asyncSend(packet, [this, payload_data](size_t){
+                        Logger::log("Info: Server sent STATS_ACK with its stats.");
+                        nlohmann::json stats_payload = parseStats(payload_data);
+                        Logger::log("Info: Server Stats (sent): " + stats_payload.dump());
+                        transitionTo(State::FINISHED);
+                    });
+                } else {
+                    Logger::log("Warning: Received STATS_EXCHANGE in unexpected state: " + std::string(stateToString(currentState)));
                 }
-
-                // Send server stats back to client
-                TestStats serverStats = packetReceiver->getStats();
-                using json = nlohmann::json;
-                json ack_payload = serverStats; // Use the to_json function implicitly
-                std::string ack_payload_str = ack_payload.dump();
-                
-                std::vector<char> payload_data(ack_payload_str.begin(), ack_payload_str.end());
-
-                PacketHeader ackHeader{};
-                ackHeader.startCode = PROTOCOL_START_CODE;
-                ackHeader.messageType = MessageType::STATS_ACK;
-                ackHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
-                ackHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
-
-                std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
-                std::memcpy(packet.data(), &ackHeader, sizeof(PacketHeader));
-                if (!payload_data.empty()) {
-                    std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
-                }
-
-                networkInterface->asyncSend(packet, [this](size_t){
-                    Logger::log("Info: Server sent STATS_ACK with its stats.");
-                    transitionTo(State::FINISHED);
-                });
                 break;
             }
             default:
@@ -407,15 +468,20 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     transitionTo_nolock(State::RUNNING_TEST);
                 }
                 break;
+            case MessageType::TEST_FIN:
+                DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
+                if (currentState == State::FINISHING) {
+                    Logger::log("Info: Client received TEST_FIN from server. Handshake complete.");
+                    transitionTo_nolock(State::EXCHANGING_STATS);
+                }
+                break;
             case MessageType::STATS_ACK:
                 DebugPause(string_format("[%s:%d] MessageType::%s",  __FUNCTION__, __LINE__,MessageTypeToString(header.messageType)));
                 if (currentState == State::EXCHANGING_STATS) {
                     Logger::log("Info: Client received STATS_ACK. Finalizing test.");
                     // Parse and store server stats
                     try {
-                        using json = nlohmann::json;
-                        std::string stats_str(payload.begin(), payload.end());
-                        json stats_payload = json::parse(stats_str);
+                        nlohmann::json stats_payload = parseStats(payload);
                         m_remoteStats = stats_payload.get<TestStats>(); // Use from_json implicitly
                         Logger::log("Info: Server Stats: " + stats_payload.dump());
                     } catch (const std::exception& e) {
@@ -432,14 +498,26 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
     }
 }
 
+/**
+ * @brief Callback for when the PacketGenerator has completed its sending duration.
+ * This function is called on the client side when the test duration is over.
+ */
 void TestController::onTestCompleted() {
     Logger::log("Info: Data transmission completed.");
-    transitionTo(State::EXCHANGING_STATS);
+    transitionTo(State::FINISHING);
 }
 
+/**
+ * @brief Sends client-side statistics to the server and waits for acknowledgment.
+ *
+ * This function is called on the client side after the main data transfer is complete.
+ * It sends a final statistics packet to the server and then waits for a corresponding
+ * acknowledgment from the server to ensure the stats were received.
+ */
 void TestController::sendClientStatsAndAwaitAck() {
     using json = nlohmann::json;
     TestStats clientStats = packetGenerator->getStats();
+    packetGenerator->saveLastStats(clientStats);
     json stats_payload = clientStats; // Use the to_json function implicitly
     std::string payload_str = stats_payload.dump();
 
@@ -457,9 +535,11 @@ void TestController::sendClientStatsAndAwaitAck() {
         std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
     }
 
-    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
+    networkInterface->asyncSend(packet, [this, payload_data](size_t bytesSent) {
         if (bytesSent > 0) {
             Logger::log("Info: Client sent STATS_EXCHANGE successfully.");
+            nlohmann::json stats_payload = parseStats(payload_data);
+            Logger::log("Info: Client Stats (sent): " + stats_payload.dump());
             // Now we wait for STATS_ACK in onPacket
         } else {
             Logger::log("Error: Client failed to send STATS_EXCHANGE.");
@@ -471,4 +551,3 @@ void TestController::sendClientStatsAndAwaitAck() {
 void TestController::cancelTimer() {
     // No-op placeholder for now
 }
-

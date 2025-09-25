@@ -39,13 +39,23 @@ public:
         WAITING_FOR_CONFIG, // Server is waiting for the client's configuration.
         // Common states for both client and server
         RUNNING_TEST,       // The data transfer phase of the test is active.
+        FINISHING,          // Handshake to confirm test completion before exchanging stats.
         EXCHANGING_STATS,   // Exchanging final statistics
         FINISHED,           // The test has completed successfully.
         ERRORED             // An unrecoverable error occurred.
     };
 
+    /**
+     * @brief Constructs a TestController object.
+     */
     TestController();
+
+    /**
+     * @brief Destroys the TestController object.
+     */
     ~TestController();
+
+    nlohmann::json parseStats(const std::vector<char>& payload) const;
 
     /**
      * @brief Starts a new test with the given configuration.
@@ -68,25 +78,42 @@ public:
 private:
     friend class CLIHandler;
     // --- Core Components ---
+    /** @brief The network interface for sending and receiving packets. */
     std::unique_ptr<NetworkInterface> networkInterface;
+    /** @brief The packet generator for creating packets to be sent. */
     std::unique_ptr<PacketGenerator> packetGenerator;
+    /** @brief The packet receiver for processing incoming packets. */
     std::unique_ptr<PacketReceiver> packetReceiver;
     
     // --- State Machine and Synchronization ---
-    std::atomic<State> currentState;        // The current state of the test.
-    std::mutex m_stateMachineMutex;         // Mutex to protect the state machine logic.
-    Config currentConfig;                   // The configuration for the current test.
-    std::promise<void> testCompletionPromise; // Promise to signal test completion.
-    std::atomic<bool> testCompletionPromise_set; // Flag to ensure set_value is called only once.
-    uint32_t m_expectedDataPacketCounter;   // Counter for validating packet sequence.
-    std::atomic<long long> m_contentMismatchCount{0}; // Payload content mismatches counted on server side.
-    std::chrono::steady_clock::time_point m_testStartTime; // Timestamp when RUNNING_TEST started
-    TestStats m_remoteStats; // Added for remote stats
+    /** @brief The current state of the test. */
+    std::atomic<State> currentState;
+    /** @brief Mutex to protect the state machine logic. */
+    std::mutex m_stateMachineMutex;
+    /** @brief The configuration for the current test. */
+    Config currentConfig;
+    /** @brief Promise to signal test completion to the main thread. */
+    std::promise<void> testCompletionPromise;
+    /** @brief Flag to ensure the test completion promise is set only once. */
+    std::atomic<bool> testCompletionPromise_set;
+    /** @brief Counter for validating the sequence of received data packets. */
+    uint32_t m_expectedDataPacketCounter;
+    /** @brief Counter for payload content mismatches, used on the server side. */
+    std::atomic<long long> m_contentMismatchCount{0};
+    /** @brief Timestamp marking the start of the RUNNING_TEST state. */
+    std::chrono::steady_clock::time_point m_testStartTime;
+    /** @brief Stores statistics received from the remote peer. */
+    TestStats m_remoteStats;
 
+    // --- CLI Synchronization ---
+    /** @brief Mutex for blocking the CLI thread while a test is running. */
     std::mutex m_cliBlockMutex;
+    /** @brief Condition variable to signal the CLI thread to unblock. */
     std::condition_variable m_cliBlockCv;
-    std::atomic<bool> m_cliBlockFlag; // Set to true when test is finished/errored
-    std::atomic<bool> m_stopped; // Flag to ensure stopTest is only called once.
+    /** @brief Flag to indicate that the CLI thread should unblock. */
+    std::atomic<bool> m_cliBlockFlag;
+    /** @brief Flag to ensure stopTest() logic is executed only once. */
+    std::atomic<bool> m_stopped;
 
     
 
@@ -102,6 +129,13 @@ private:
      */
     void onTestCompleted();
 
+    /**
+     * @brief Sends client-side statistics to the server and waits for acknowledgment.
+     *
+     * This function is called on the client side after the main data transfer is complete.
+     * It sends a final statistics packet to the server and then waits for a corresponding
+     * acknowledgment from the server to ensure the stats were received.
+     */
     void sendClientStatsAndAwaitAck();
 
     /**

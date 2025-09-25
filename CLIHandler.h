@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "TestController.h"
 #include "ConfigParser.h"
@@ -44,6 +44,6 @@ private:
      */
     Config parseArgs(int argc, char* argv[]);
 
-    // A reference to the TestController to manage the test.
+    /**< A reference to the TestController to manage the test. */
     TestController& testController;
 };

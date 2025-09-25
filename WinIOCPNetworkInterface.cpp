@@ -3,9 +3,17 @@
 #include "Logger.h"
 #include <stdexcept>
 #include <chrono>
+#include <ws2tcpip.h> // For InetPton, InetNtop
 #include <string>
+#include <Mswsock.h> // For CancelIoEx
 
-// Helper function to get the error message string from a Windows error code.
+#pragma comment(lib, "Mswsock.lib")
+
+/**
+ * @brief Retrieves the error message string from a Windows error code.
+ * @param errorCode The Windows error code.
+ * @return The error message string.
+ */
 std::string getErrorMessage(DWORD errorCode) {
     if (errorCode == 0) {
         return "No error.";
@@ -80,39 +88,65 @@ bool WinIOCPNetworkInterface::initialize(const std::string& ip, int port) {
 }
 
 /**
- * @brief Shuts down the interface, closes handles, and stops threads.
+ * @brief Shuts down the interface, closes handles, and stops threads gracefully.
  */
 void WinIOCPNetworkInterface::close() {
     if (!running.exchange(false)) {
-        return; // Already closed
+        return; // Already closed or closing
     }
+    Logger::log("Debug: WinIOCPNetworkInterface::close() started.");
 
-    // Post a special completion packet to each worker thread to wake it up and allow it to exit cleanly.
+    // 1. Cancel any pending I/O operations on the sockets.
+    // This helps unblock the worker threads from GetQueuedCompletionStatus.
+    if (listenSocket != INVALID_SOCKET) {
+        CancelIoEx((HANDLE)listenSocket, NULL);
+    }
+    if (clientSocket != INVALID_SOCKET) {
+        CancelIoEx((HANDLE)clientSocket, NULL);
+    }
+    Logger::log("Debug: Canceled pending I/O operations.");
+
+    // 2. Gracefully shut down the sockets.
+    // This signals the other side of the connection that we are closing.
+    if (clientSocket != INVALID_SOCKET) {
+        shutdown(clientSocket, SD_BOTH);
+    }
+    Logger::log("Debug: Shutdown client socket.");
+
+    // 3. Post completion statuses to wake up worker threads.
+    // This ensures they exit their loop if they are waiting on an empty queue.
     for (size_t i = 0; i < workerThreads.size(); ++i) {
         PostQueuedCompletionStatus(iocpHandle, 0, 0, NULL);
     }
+    Logger::log("Debug: Posted shutdown messages to worker threads.");
 
-    // Wait for all worker threads to terminate.
+    // 4. Wait for all worker threads to terminate.
     for (auto& t : workerThreads) {
         if (t.joinable()) {
             t.join();
         }
     }
     workerThreads.clear();
+    Logger::log("Debug: All worker threads have joined.");
 
+    // 5. Now it's safe to close the sockets and the IOCP handle.
     if (listenSocket != INVALID_SOCKET) {
         closesocket(listenSocket);
         listenSocket = INVALID_SOCKET;
+        Logger::log("Debug: Closed listen socket.");
     }
     if (clientSocket != INVALID_SOCKET) {
         closesocket(clientSocket);
         clientSocket = INVALID_SOCKET;
+        Logger::log("Debug: Closed client socket.");
     }
     if (iocpHandle != NULL) {
         CloseHandle(iocpHandle);
         iocpHandle = NULL;
+        Logger::log("Debug: Closed IOCP handle.");
     }
-    Logger::log("Info: Network interface closed.");
+
+    Logger::log("Info: Network interface closed successfully.");
 }
 
 /**
@@ -174,7 +208,7 @@ void WinIOCPNetworkInterface::asyncConnect(const std::string& ip, int port, Conn
 
     sockaddr_in service;
     service.sin_family = AF_INET;
-    InetPton(AF_INET, ip.c_str(), &service.sin_addr);
+    InetPtonA(AF_INET, ip.c_str(), &service.sin_addr);
     service.sin_port = htons(port);
 
     // Initiate the asynchronous connection.
@@ -312,6 +346,11 @@ void WinIOCPNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback callb
 
 // --- Blocking methods (less preferred, for simple cases) ---
 
+/**
+ * @brief Sends data synchronously.
+ * @param data The data to send.
+ * @return The number of bytes sent, or -1 on error.
+ */
 int WinIOCPNetworkInterface::blockingSend(const std::vector<char>& data) {
     if (clientSocket == INVALID_SOCKET) return -1;
     int bytesSent = send(clientSocket, data.data(), static_cast<int>(data.size()), 0);
@@ -322,6 +361,11 @@ int WinIOCPNetworkInterface::blockingSend(const std::vector<char>& data) {
     return bytesSent;
 }
 
+/**
+ * @brief Receives data synchronously.
+ * @param bufferSize The size of the buffer to receive into.
+ * @return A vector containing the received data. An empty vector indicates an error or closed connection.
+ */
 std::vector<char> WinIOCPNetworkInterface::blockingReceive(size_t bufferSize) {
     if (clientSocket == INVALID_SOCKET) return {};
     std::vector<char> buffer(bufferSize);
@@ -352,6 +396,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
         IO_DATA* ioData = (IO_DATA*)lpOverlapped;
 
         if (ioData == NULL) { // Shutdown signal
+            Logger::log("Info: IOCP worker thread received shutdown signal.");
             continue;
         }
 
@@ -396,7 +441,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                         int addrLen = sizeof(addr);
                         getpeername(ioData->clientSocket, (SOCKADDR*)&addr, &addrLen);
                         char clientIp[INET_ADDRSTRLEN];
-                        InetNtop(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
+                        InetNtopA(AF_INET, &addr.sin_addr, clientIp, INET_ADDRSTRLEN);
                         Logger::log("Info: Client connection accepted from " + std::string(clientIp) + ":" + std::to_string(ntohs(addr.sin_port)));
                         ioData->acceptCallback(true, clientIp, ntohs(addr.sin_port));
                     }
@@ -420,6 +465,12 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
     Logger::log("Info: IOCP worker thread stopping.");
 }
 
+/**
+ * @brief Sets up the listening socket for the server.
+ * @param ip The IP address to bind to.
+ * @param port The port to listen on.
+ * @return True if successful, false otherwise.
+ */
 bool WinIOCPNetworkInterface::setupListeningSocket(const std::string& ip, int port) {
     listenSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
     if (listenSocket == INVALID_SOCKET) {
@@ -430,7 +481,7 @@ bool WinIOCPNetworkInterface::setupListeningSocket(const std::string& ip, int po
 
     sockaddr_in service;
     service.sin_family = AF_INET;
-    InetPton(AF_INET, ip.c_str(), &service.sin_addr);
+    InetPtonA(AF_INET, ip.c_str(), &service.sin_addr);
     service.sin_port = htons(port);
 
     if (bind(listenSocket, (SOCKADDR*)&service, sizeof(service)) == SOCKET_ERROR) {
