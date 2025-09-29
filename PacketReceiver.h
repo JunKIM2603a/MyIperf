@@ -121,8 +121,10 @@ private:
     // --- Statistics Counters ---
     /**< Total number of valid packets received. */
     std::atomic<long long> m_totalPacketsReceived{0};
-    /**< Number of packets that failed checksum validation. */
+    /**< Tracks packets that fail checksum validation, indicating data corruption. */
     std::atomic<long long> m_failedChecksumCount{0};
-    /**< Number of packets received out of sequence. */
+    /**< Tracks packets that arrive with an unexpected sequence number, indicating packet loss or reordering. */
     std::atomic<long long> m_sequenceErrorCount{0};
+    /**< Tracks packets whose payload is altered during transit, indicating a subtle form of data corruption. */
+    std::atomic<long long> m_contentMismatchCount{0};
 };

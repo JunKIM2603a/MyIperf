@@ -1,4 +1,4 @@
-﻿#include "PacketGenerator.h"
+#include "PacketGenerator.h"
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
@@ -40,46 +40,10 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     m_startTime = std::chrono::steady_clock::now();
     memset(&m_LastStats, 0, sizeof(TestStats));
 
-    // Prepare the reusable packet template
-    preparePacketTemplate();
-
     Logger::log("Info: PacketGenerator started.");
     // Start the dedicated generator thread
     m_generatorThread = std::thread(&PacketGenerator::generatorThreadLoop, this);
     Logger::log("Debug: PacketGenerator::start exited.");
-}
-
-/**
- * @brief Prepares the packet template to be reused for sending.
- * This improves performance by avoiding repeated allocation and construction.
- */
-void PacketGenerator::preparePacketTemplate() {
-    Logger::log("Debug: PacketGenerator::preparePacketTemplate entered.");
-    const size_t packetSize = config.getPacketSize();
-    if (packetSize < sizeof(PacketHeader)) {
-        Logger::log("Error: Packet size is smaller than header size. Cannot generate packets.");
-        m_packetTemplate.clear();
-        return;
-    }
-
-    m_packetTemplate.resize(packetSize);
-    const size_t payloadSize = packetSize - sizeof(PacketHeader);
-    std::string payload_str = buildExpectedPayload(0, payloadSize); // Use a dummy packet number for the template
-
-    PacketHeader header;
-    header.startCode = PROTOCOL_START_CODE;
-    header.senderId = static_cast<std::underlying_type_t<Config::TestMode>>(config.getMode());
-    header.receiverId = static_cast<std::underlying_type_t<Config::TestMode>>((config.getMode() == Config::TestMode::CLIENT) ? Config::TestMode::SERVER : Config::TestMode::CLIENT);
-    header.messageType = MessageType::DATA_PACKET;
-    header.packetCounter = 0; // Will be updated per packet
-    header.payloadSize = static_cast<uint32_t>(payloadSize);
-    header.checksum = calculateChecksum(payload_str.data(), payloadSize);
-
-    memcpy(m_packetTemplate.data(), &header, sizeof(PacketHeader));
-    if (payloadSize > 0) {
-        memcpy(m_packetTemplate.data() + sizeof(PacketHeader), payload_str.data(), payloadSize);
-    }
-    Logger::log("Debug: PacketGenerator::preparePacketTemplate exited.");
 }
 
 /**
@@ -100,43 +64,49 @@ void PacketGenerator::stop() {
 }
 
 /**
- * @brief Resets the generator's statistics for a new test phase.
- */
-void PacketGenerator::resetStats() {
-    Logger::log("Debug: PacketGenerator::resetStats entered.");
-    totalBytesSent = 0;
-    totalPacketsSent = 0;
-    packetCounter = 0;
-    m_startTime = std::chrono::steady_clock::now();
-    m_endTime = std::chrono::steady_clock::time_point(); // Reset end time
-    Logger::log("Debug: PacketGenerator::resetStats exited.");
-}
-
-/**
- * @brief Creates and sends the next packet using the pre-built template.
+ * @brief Creates and sends the next packet, building it from scratch to ensure correctness.
  * This function is the core of the generation loop.
  */
 void PacketGenerator::sendNextPacket() {
-    if (!running || m_packetTemplate.empty()) {
+    if (!running) {
         return;
     }
 
-    // 1. Create a working copy of the packet from the template.
-    std::vector<char> packet = m_packetTemplate;
+    const size_t packetSize = config.getPacketSize();
+    if (packetSize < sizeof(PacketHeader)) {
+        // This check is important to prevent buffer overflows if config is invalid.
+        return;
+    }
 
-    // 2. Get a pointer to the header and update the packet counter.
-    PacketHeader* header = reinterpret_cast<PacketHeader*>(packet.data());
-    header->packetCounter = packetCounter++;
+    // 1. Build the payload and calculate the checksum for the CURRENT packet.
+    const size_t payloadSize = packetSize - sizeof(PacketHeader);
+    std::string payload_str = buildExpectedPayload(packetCounter, payloadSize);
+    uint32_t checksum = calculateChecksum(payload_str.data(), payloadSize);
 
-    // Note: The checksum is not recalculated here because it's based on the payload,
-    // which doesn't change. If the header were part of the checksum, we would
-    // need to update it here.
+    // 2. Construct the header with the correct, unique information.
+    PacketHeader header;
+    header.startCode = PROTOCOL_START_CODE;
+    header.senderId = static_cast<std::underlying_type_t<Config::TestMode>>(config.getMode());
+    header.receiverId = static_cast<std::underlying_type_t<Config::TestMode>>((config.getMode() == Config::TestMode::CLIENT) ? Config::TestMode::SERVER : Config::TestMode::CLIENT);
+    header.messageType = MessageType::DATA_PACKET;
+    header.packetCounter = packetCounter; // Set the correct sequence number.
+    header.payloadSize = static_cast<uint32_t>(payloadSize);
+    header.checksum = checksum; // Set the correct checksum.
 
-    Logger::log("Debug: PacketGenerator::sendNextPacket - Calling asyncSend. bytes=" + std::to_string(packet.size()));
-    // 3. Asynchronously send the packet.
+    // 3. Assemble the final packet for sending.
+    std::vector<char> packet(packetSize);
+    memcpy(packet.data(), &header, sizeof(PacketHeader));
+    if (payloadSize > 0) {
+        memcpy(packet.data() + sizeof(PacketHeader), payload_str.data(), payloadSize);
+    }
+
+    // 4. Asynchronously send the packet.
     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
         onPacketSent(bytesSent);
     });
+
+    // 5. Increment the counter for the next packet.
+    packetCounter++;
 }
 
 /**
@@ -209,7 +179,9 @@ TestStats PacketGenerator::getStats() {
     if (m_endTime > m_startTime) {
         stats.duration = std::chrono::duration<double>(m_endTime - m_startTime).count();
         if (stats.duration > 0) {
-            // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
+            // Throughput is calculated as the total bytes sent (converted to bits) divided by the
+            // test duration in seconds. The result is then divided by 1,000,000 to convert from bits
+            // per second to Megabits per second (Mbps).
             stats.throughputMbps = (static_cast<double>(stats.totalBytesSent) * 8.0) / stats.duration / 1'000'000.0;
         }
     }
@@ -223,4 +195,17 @@ void PacketGenerator::saveLastStats(const TestStats& Stats) {
 
 TestStats PacketGenerator::lastStats() const{
     return m_LastStats;
+}
+
+/**
+ * @brief Resets the generator's statistics for a new test phase.
+ */
+void PacketGenerator::resetStats() {
+    Logger::log("Debug: PacketGenerator::resetStats entered.");
+    totalBytesSent = 0;
+    totalPacketsSent = 0;
+    packetCounter = 0;
+    m_startTime = std::chrono::steady_clock::now();
+    m_endTime = std::chrono::steady_clock::time_point(); // Reset end time
+    Logger::log("Debug: PacketGenerator::resetStats exited.");
 }

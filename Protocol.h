@@ -23,28 +23,33 @@ enum class MessageType : uint8_t {
  * @brief Holds comprehensive statistics for a test, including sent and received data.
  */
 struct TestStats {
-    /** @brief Total bytes sent. */
+    /** @brief Total bytes sent, including packet headers. */
     long long totalBytesSent;
-    /** @brief Total packets sent. */
+    /** @brief Total number of packets sent. */
     long long totalPacketsSent;
-    /** @brief Total bytes received. */
+    /** @brief Total bytes received, including packet headers. */
     long long totalBytesReceived;
-    /** @brief Total packets received. */
+    /** @brief Total number of valid packets received. */
     long long totalPacketsReceived;
-    /** @brief Number of packets that failed checksum validation. */
+    /** @brief Count of received packets that failed the checksum validation, indicating data corruption. */
     long long failedChecksumCount;
-    /** @brief Number of packets received out of sequence. */
+    /** @brief Count of received data packets that arrived out of order, indicating packet loss or reordering. */
     long long sequenceErrorCount;
-    /** @brief Duration of the test in seconds. */
+    /** @brief Count of received data packets whose payload was corrupted in a way that the checksum did not detect. */
+    long long contentMismatchCount;
+    /** @brief The duration of the test phase in seconds, measured from the start of data transfer to the end. */
     double duration;
-    /** @brief Calculated throughput in Megabits per second. */
+    /** 
+     * @brief Calculated throughput in Megabits per second (Mbps).
+     * Formula: (totalBytesReceived * 8) / duration / 1,000,000
+     */
     double throughputMbps;
 
     /**
      * @brief Default constructor to initialize all stats to zero.
      */
     TestStats() : totalBytesSent(0), totalPacketsSent(0), totalBytesReceived(0), totalPacketsReceived(0),
-                  failedChecksumCount(0), sequenceErrorCount(0), duration(0.0), throughputMbps(0.0) {}
+                  failedChecksumCount(0), sequenceErrorCount(0), contentMismatchCount(0), duration(0.0), throughputMbps(0.0) {}
 };
 
 namespace nlohmann {
@@ -68,6 +73,7 @@ namespace nlohmann {
                                  {"totalPacketsReceived", s.totalPacketsReceived},
                                  {"failedChecksumCount", s.failedChecksumCount},
                                  {"sequenceErrorCount", s.sequenceErrorCount},
+                                 {"contentMismatchCount", s.contentMismatchCount},
                                  {"duration", s.duration},
                                  {"throughputMbps", s.throughputMbps}};
         }
@@ -84,6 +90,7 @@ namespace nlohmann {
             j.at("totalPacketsReceived").get_to(s.totalPacketsReceived);
             j.at("failedChecksumCount").get_to(s.failedChecksumCount);
             j.at("sequenceErrorCount").get_to(s.sequenceErrorCount);
+            j.at("contentMismatchCount").get_to(s.contentMismatchCount);
             j.at("duration").get_to(s.duration);
             j.at("throughputMbps").get_to(s.throughputMbps);
         }

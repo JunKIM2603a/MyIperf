@@ -1,4 +1,4 @@
-#include "TestController.h"
+﻿#include "TestController.h"
 #include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
@@ -11,6 +11,24 @@
 #include <thread>
 #include <string>
 #include <memory>
+#include <sstream>
+#include <iomanip>
+
+// Helper function to format stats for logging
+std::string formatStatsForLogging(const TestStats& stats) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(2);
+    ss << "\n    - Total Bytes Sent:     " << stats.totalBytesSent
+       << "\n    - Total Packets Sent:   " << stats.totalPacketsSent
+       << "\n    - Total Bytes Received: " << stats.totalBytesReceived
+       << "\n    - Total Packets Received: " << stats.totalPacketsReceived
+       << "\n    - Duration:             " << stats.duration << " s"
+       << "\n    - Throughput:           " << stats.throughputMbps << " Mbps"
+       << "\n    - Sequence Errors:      " << stats.sequenceErrorCount
+       << "\n    - Failed Checksums:     " << stats.failedChecksumCount
+       << "\n    - Content Mismatches:   " << stats.contentMismatchCount;
+    return ss.str();
+}
 
 /**
  * @brief Converts a State enum to its string representation for logging.
@@ -359,12 +377,12 @@ void TestController::transitionTo_nolock(State newState) {
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
 
             Logger::log("\n=============== FINAL TEST SUMMARY ===============");
-            Logger::log("Phase 1: Client to Server");
-            Logger::log("  - Client Sent:     " + nlohmann::json(m_clientStatsPhase1).dump());
-            Logger::log("  - Server Received: " + nlohmann::json(m_serverStatsPhase1).dump());
-            Logger::log("Phase 2: Server to Client");
-            Logger::log("  - Server Sent:     " + nlohmann::json(m_serverStatsPhase2).dump());
-            Logger::log("  - Client Received: " + nlohmann::json(m_clientStatsPhase2).dump());
+            Logger::log("\n--- Phase 1: Client to Server ---");
+            Logger::log("Client Sent:" + formatStatsForLogging(m_clientStatsPhase1));
+            Logger::log("Server Received:" + formatStatsForLogging(m_serverStatsPhase1));
+            Logger::log("\n--- Phase 2: Server to Client ---");
+            Logger::log("Server Sent:" + formatStatsForLogging(m_serverStatsPhase2));
+            Logger::log("Client Received:" + formatStatsForLogging(m_clientStatsPhase2));
             Logger::log("================================================\n");
 
             if (!testCompletionPromise_set) {
@@ -483,8 +501,8 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         m_serverStatsPhase1 = packetReceiver->getStats();
 
                         Logger::log("--- Test Phase 1 Summary ---");
-                        Logger::log("Client-side (sent): " + client_stats_payload.dump());
-                        Logger::log("Server-side (received): " + nlohmann::json(m_serverStatsPhase1).dump());
+                        Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
+                        Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
                         Logger::log("----------------------------");
 
                     } catch (const std::exception& e) {
@@ -520,8 +538,8 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         m_serverStatsPhase2 = packetGenerator->getStats();
 
                         Logger::log("--- Test Phase 2 Summary ---");
-                        Logger::log("Server-side (sent): " + nlohmann::json(m_serverStatsPhase2).dump());
-                        Logger::log("Client-side (received): " + client_stats_payload.dump());
+                        Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
+                        Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
                         Logger::log("----------------------------");
 
                     } catch (const std::exception& e) {
@@ -614,8 +632,8 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         m_clientStatsPhase1 = packetGenerator->lastStats();
 
                         Logger::log("--- Test Phase 1 Summary ---");
-                        Logger::log("Client-side (sent): " + nlohmann::json(m_clientStatsPhase1).dump());
-                        Logger::log("Server-side (received): " + server_stats_payload.dump());
+                        Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
+                        Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
                         Logger::log("----------------------------");
 
                     } catch (const std::exception& e) {
@@ -643,12 +661,21 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     try {
                         nlohmann::json server_stats_payload = parseStats(payload);
                         m_serverStatsPhase2 = server_stats_payload.get<TestStats>();
-                        Logger::log("Info: Server Stats (Phase 2): " + server_stats_payload.dump());
+
+                        Logger::log("--- Test Phase 2 Summary ---");
+                        Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
+                        Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
+                        Logger::log("----------------------------");
+
                     } catch (const std::exception& e) {
                         Logger::log("Warning: Could not parse final server stats: " + std::string(e.what()));
                     }
                     transitionTo_nolock(State::FINISHED);
                 }
+                break;
+            case MessageType::DATA_PACKET:
+                // Data packets are handled by the PacketReceiver for statistical purposes.
+                // The TestController's state machine does not need to act on them, so we simply ignore them.
                 break;
             default:
                 Logger::log("Warning: Client received an unexpected message type: " + std::to_string((int)header.messageType));

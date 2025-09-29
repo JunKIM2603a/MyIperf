@@ -110,8 +110,6 @@ private:
     uint32_t packetCounter;
     /**< Callback to notify completion. */
     CompletionCallback completionCallback;
-    /**< Pre-built packet template for efficiency. */
-    std::vector<char> m_packetTemplate;
 
     /**< Thread to manage the sending loop. */
     std::thread m_generatorThread;

@@ -37,7 +37,8 @@ void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback o
     m_receiveBuffer.clear();
     expectedPacketCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
-    packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
+    // packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
+    packetBufferSize = 1000000000; // buffer size 1GiB
 
     Logger::log("Info: PacketReceiver started.");
     // Start the first asynchronous receive operation.
@@ -65,12 +66,15 @@ TestStats PacketReceiver::getStats() const {
     stats.totalPacketsReceived = m_totalPacketsReceived.load();
     stats.failedChecksumCount = m_failedChecksumCount.load();
     stats.sequenceErrorCount = m_sequenceErrorCount.load();
+    stats.contentMismatchCount = m_contentMismatchCount.load();
 
     stats.totalBytesReceived = currentBytesReceived;
     if (m_endTime > m_startTime) {
         stats.duration = std::chrono::duration<double>(m_endTime - m_startTime).count();
         if (stats.duration > 0) {
-            // Throughput (Mbps) = (Total Bytes * 8 bits/byte) / (Duration in seconds * 1,000,000 bits/megabit)
+            // Throughput is calculated as the total bytes received (converted to bits) divided by the
+            // test duration in seconds. The result is then divided by 1,000,000 to convert from bits
+            // per second to Megabits per second (Mbps).
             stats.throughputMbps = (static_cast<double>(stats.totalBytesReceived) * 8.0) / stats.duration / 1'000'000.0;
         }
     }
@@ -89,6 +93,7 @@ void PacketReceiver::resetStats() {
     m_totalPacketsReceived = 0;
     m_failedChecksumCount = 0;
     m_sequenceErrorCount = 0;
+    m_contentMismatchCount = 0;
     expectedPacketCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
     m_endTime = std::chrono::steady_clock::now();
@@ -126,7 +131,8 @@ void PacketReceiver::onPacketReceived(const std::vector<char>& data, size_t byte
         // Immediately post the next receive request.
         receiveNextPacket();
     } else {
-        // A zero-byte receive often indicates that the connection has been closed by the peer.
+        // A zero-byte receive is a special condition that typically indicates the peer has gracefully
+        // closed the connection from their side.
         Logger::log("Warning: 0 bytes received. The connection may have been closed.");
         // Process any data that might be lingering in the buffer before stopping.
         processBuffer();
@@ -167,24 +173,32 @@ void PacketReceiver::processBuffer() {
         // A complete packet is in the buffer. Now, validate it.
         const char* payload = m_receiveBuffer.data() + sizeof(PacketHeader);
         
-        // Verify the packet's start code to ensure it's a valid packet.
+        // The start code is a magic number (0xABCD) that marks the beginning of a packet. If this is
+        // not found, it means we are out of sync with the data stream, likely due to prior corruption
+        // or packet loss. We discard one byte and try to resynchronize at the next byte.
         if (header->startCode != PROTOCOL_START_CODE) {
             Logger::log("Error: Invalid start code detected. Discarding one byte to find the next packet.");
             m_receiveBuffer.erase(m_receiveBuffer.begin());
             continue; // Retry with the rest of the buffer.
         }
 
-        // Verify the packet's integrity using a checksum.
+        // The checksum is a simple validation to detect if the packet's payload was corrupted during
+        // transit. If verifyPacket fails, it means the data has been altered.
         if (verifyPacket(*header, payload)) {
             // Packet is valid. Extract the payload and invoke the callback.
             std::vector<char> payload_vec(payload, payload + header->payloadSize);
-            // Optional content verification only for DATA_PACKET
+
+            // This is a secondary, more rigorous check for data integrity. It rebuilds the expected
+            // payload from scratch and compares it byte-for-byte against the received payload.
+            // A mismatch here indicates a subtle data corruption that the simpler checksum failed to catch.
             if (header->messageType == MessageType::DATA_PACKET) {
                 const std::string expected = buildExpectedPayload(header->packetCounter, header->payloadSize);
                 if (expected.size() == payload_vec.size() && !std::equal(payload_vec.begin(), payload_vec.end(), expected.begin())) {
                     Logger::log("Warning: Payload content mismatch for packet " + std::to_string(header->packetCounter));
+                    m_contentMismatchCount++;
                 }
             }
+
             if (onPacketCallback) {
                 Logger::log("Debug: PacketReceiver::processBuffer - Dispatching packet. Message Type: " + std::to_string(static_cast<int>(header->messageType)) + ", Packet Counter: " + std::to_string(header->packetCounter)
                 + ", payloadSize: " + std::to_string(header->payloadSize));
@@ -200,7 +214,10 @@ void PacketReceiver::processBuffer() {
                 currentBytesReceived += totalPacketSize;
                 m_totalPacketsReceived++;
             }
-            // Sequence checking should only apply to data packets.
+
+            // A sequence error occurs if a data packet arrives with a number different from the one
+            // we expect. This implies that one or more packets were lost or significantly reordered
+            // in transit.
             if (header->messageType == MessageType::DATA_PACKET) {
                 if (header->packetCounter != expectedPacketCounter) {
                     m_sequenceErrorCount++;
