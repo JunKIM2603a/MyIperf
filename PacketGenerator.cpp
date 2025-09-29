@@ -1,4 +1,4 @@
-#include "PacketGenerator.h"
+﻿#include "PacketGenerator.h"
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
@@ -97,6 +97,19 @@ void PacketGenerator::stop() {
     m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketGenerator stopped.");
     Logger::log("Debug: PacketGenerator::stop exited.");
+}
+
+/**
+ * @brief Resets the generator's statistics for a new test phase.
+ */
+void PacketGenerator::resetStats() {
+    Logger::log("Debug: PacketGenerator::resetStats entered.");
+    totalBytesSent = 0;
+    totalPacketsSent = 0;
+    packetCounter = 0;
+    m_startTime = std::chrono::steady_clock::now();
+    m_endTime = std::chrono::steady_clock::time_point(); // Reset end time
+    Logger::log("Debug: PacketGenerator::resetStats exited.");
 }
 
 /**

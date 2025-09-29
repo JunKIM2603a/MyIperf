@@ -47,6 +47,11 @@ public:
      */
     void stop();
 
+    /**
+     * @brief Resets the generator's internal statistics.
+     */
+    void resetStats();
+
     // --- Public Getters for Statistics ---
 
     /**

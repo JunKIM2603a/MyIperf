@@ -41,6 +41,14 @@ public:
         RUNNING_TEST,       // The data transfer phase of the test is active.
         FINISHING,          // Handshake to confirm test completion before exchanging stats.
         EXCHANGING_STATS,   // Exchanging final statistics
+
+        // States for Server-to-Client Test
+        WAITING_FOR_CLIENT_READY, // Server waits for client ready signal after first test
+        RUNNING_SERVER_TEST,      // Server is sending data to the client
+        WAITING_FOR_SERVER_FIN,   // Client is waiting for server to finish
+        SERVER_TEST_FINISHING,    // Server-to-client test is wrapping up
+        EXCHANGING_SERVER_STATS,  // Final stats exchange initiated by server
+
         FINISHED,           // The test has completed successfully.
         ERRORED             // An unrecoverable error occurred.
     };
@@ -104,6 +112,12 @@ private:
     std::chrono::steady_clock::time_point m_testStartTime;
     /** @brief Stores statistics received from the remote peer. */
     TestStats m_remoteStats;
+
+    // --- Statistics Storage for Final Report ---
+    TestStats m_clientStatsPhase1;
+    TestStats m_serverStatsPhase1;
+    TestStats m_clientStatsPhase2;
+    TestStats m_serverStatsPhase2;
 
     // --- CLI Synchronization ---
     /** @brief Mutex for blocking the CLI thread while a test is running. */
