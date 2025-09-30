@@ -1,0 +1,100 @@
+name: Build & Release (Multi-Project)
+
+on:
+  push:
+    tags:
+      - 'v*'   # v1.0, v2.0 같은 태그 push 시 동작
+
+permissions:
+  contents: write
+
+jobs:
+  build-MyIperf:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 & MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc cmake make
+
+      - name: Configure CMake
+        working-directory: MyIperf
+        run: cmake -B build -S . -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build MyIperf
+        working-directory: MyIperf
+        run: cmake --build build --target IPEFTC -- -j4
+
+      - name: Rename & Zip MyIperf exe with version
+        working-directory: MyIperf/build/bin
+        run: |
+          $version = "${{ github.ref_name }}"
+          Rename-Item IPEFTC.exe ("MyIperf-$version.exe")
+          Compress-Archive -Path "MyIperf-$version.exe" -DestinationPath "MyIperf-$version.zip"
+
+      - name: Upload artifact (MyIperf)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyIperf
+          path: |
+            MyIperf/build/bin/MyIperf-*.exe
+            MyIperf/build/bin/MyIperf-*.zip
+
+  build-MyIperf_Pipe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSYS2 & MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc cmake make
+
+      - name: Configure CMake
+        working-directory: MyIperf_Pipe
+        run: cmake -B build -S . -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build MyIperf_Pipe
+        working-directory: MyIperf_Pipe
+        run: cmake --build build --target consumer -- -j4
+
+      - name: Rename & Zip MyIperf_Pipe exe with version
+        working-directory: MyIperf_Pipe/build
+        run: |
+          $version = "${{ github.ref_name }}"
+          Rename-Item consumer.exe ("MyIperf_Pipe-$version.exe")
+          Compress-Archive -Path "MyIperf_Pipe-$version.exe" -DestinationPath "MyIperf_Pipe-$version.zip"
+
+      - name: Upload artifact (MyIperf_Pipe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyIperf_Pipe
+          path: |
+            MyIperf_Pipe/build/MyIperf_Pipe-*.exe
+            MyIperf_Pipe/build/MyIperf_Pipe-*.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-MyIperf_Pipe, build-MyIperf]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -R artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/*.exe
+            artifacts/*.zip
