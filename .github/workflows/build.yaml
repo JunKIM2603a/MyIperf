@@ -29,31 +29,24 @@ jobs:
         working-directory: MyIperf
         run: cmake --build build --target IPEFTC -- -j4
 
-      - name: List build directory
-        run: dir MyIperf/build /s
+      - name: Ensure Release directory exists
+        run: mkdir -Force MyIperf/build/Release
 
-      - name: Rename & Zip MyIperf exe with version (safe)
-        shell: pwsh
+      - name: Rename & Zip MyIperf exe with version
         run: |
           $version = "${{ github.ref_name }}"
-          $exePath = "MyIperf/build/IPEFTC.exe"
-          if (-Not (Test-Path $exePath)) {
-              $exePath = "MyIperf/build/Release/IPEFTC.exe"
-          }
-          if (Test-Path $exePath) {
-              Rename-Item $exePath -NewName "MyIperf-$version.exe"
-              Compress-Archive -Path (Join-Path (Split-Path $exePath) "MyIperf-$version.exe") -DestinationPath (Join-Path (Split-Path $exePath) "MyIperf-$version.zip")
-          } else {
-              Write-Error "IPEFTC.exe not found in build directory!"
-          }
+          Rename-Item "IPEFTC.exe" -NewName "MyIperf-$version.exe"
+          Compress-Archive -Path "MyIperf-$version.exe" -DestinationPath "MyIperf-$version.zip"
+        shell: pwsh
+        working-directory: MyIperf/build/Release
 
       - name: Upload artifact (MyIperf)
         uses: actions/upload-artifact@v4
         with:
           name: MyIperf
           path: |
-            MyIperf/build/MyIperf-*.exe
-            MyIperf/build/MyIperf-*.zip
+            MyIperf/build/Release/MyIperf-*.exe
+            MyIperf/build/Release/MyIperf-*.zip
 
   build-MyIperf_Pipe:
     runs-on: windows-latest
@@ -75,23 +68,16 @@ jobs:
         working-directory: MyIperf_Pipe
         run: cmake --build build --target consumer -- -j4
 
-      - name: List build directory
-        run: dir MyIperf_Pipe/build /s
+      - name: Ensure bin directory exists
+        run: mkdir -Force MyIperf_Pipe/build
 
-      - name: Rename & Zip MyIperf_Pipe exe with version (safe)
-        shell: pwsh
+      - name: Rename & Zip MyIperf_Pipe exe with version
         run: |
           $version = "${{ github.ref_name }}"
-          $exePath = "MyIperf_Pipe/build/consumer.exe"
-          if (-Not (Test-Path $exePath)) {
-              $exePath = "MyIperf_Pipe/build/Release/consumer.exe"
-          }
-          if (Test-Path $exePath) {
-              Rename-Item $exePath -NewName "MyIperf_Pipe-$version.exe"
-              Compress-Archive -Path (Join-Path (Split-Path $exePath) "MyIperf_Pipe-$version.exe") -DestinationPath (Join-Path (Split-Path $exePath) "MyIperf_Pipe-$version.zip")
-          } else {
-              Write-Error "consumer.exe not found in build directory!"
-          }
+          Rename-Item "consumer.exe" -NewName "MyIperf_Pipe-$version.exe"
+          Compress-Archive -Path "MyIperf_Pipe-$version.exe" -DestinationPath "MyIperf_Pipe-$version.zip"
+        shell: pwsh
+        working-directory: MyIperf_Pipe/build
 
       - name: Upload artifact (MyIperf_Pipe)
         uses: actions/upload-artifact@v4
