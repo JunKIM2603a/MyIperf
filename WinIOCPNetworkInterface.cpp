@@ -283,7 +283,9 @@ void WinIOCPNetworkInterface::asyncAccept(AcceptCallback callback) {
  * @param callback The function to call upon completion.
  */
 void WinIOCPNetworkInterface::asyncSend(const std::vector<char>& data, SendCallback callback) {
+#ifdef DEBUG_LOG    
     Logger::log("Debug: asyncSend called. Data size: " + std::to_string(data.size()));
+#endif
     if (clientSocket == INVALID_SOCKET) {
         Logger::log("Error: asyncSend called on an invalid socket.");
         callback(0);
@@ -307,7 +309,9 @@ void WinIOCPNetworkInterface::asyncSend(const std::vector<char>& data, SendCallb
             delete ioData;
             callback(0);
         } else {
+#ifdef DEBUG_LOG
             Logger::log("Debug: WSASend pending for " + std::to_string(ioData->sendData.size()) + " bytes.");
+#endif
         }
     }
 }
@@ -318,7 +322,9 @@ void WinIOCPNetworkInterface::asyncSend(const std::vector<char>& data, SendCallb
  * @param callback The function to call upon completion.
  */
 void WinIOCPNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback callback) {
+#ifdef DEBUG_LOG
     Logger::log("Debug: asyncReceive called. Buffer size: " + std::to_string(bufferSize));
+#endif
     if (clientSocket == INVALID_SOCKET) {
         Logger::log("Error: asyncReceive called on an invalid socket.");
         callback({}, 0);
@@ -413,13 +419,17 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
 
         switch (ioData->operationType) {
             case OperationType::Recv: {
+#ifdef DEBUG_LOG
                 Logger::log("Debug: Receive operation completed. Bytes transferred: " + std::to_string(bytesTransferred));
+#endif                
                 std::vector<char> receivedData(ioData->buffer, ioData->buffer + bytesTransferred);
                 ioData->recvCallback(receivedData, bytesTransferred);
                 break;
             }
             case OperationType::Send: {
+#ifdef DEBUG_LOG
                 Logger::log("Debug: Send operation completed. Bytes transferred: " + std::to_string(bytesTransferred));
+#endif
                 ioData->sendCallback(bytesTransferred);
                 break;
             }

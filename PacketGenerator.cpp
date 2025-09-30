@@ -145,7 +145,9 @@ void PacketGenerator::generatorThreadLoop() {
  * @param bytesSent The number of bytes successfully sent.
  */
 void PacketGenerator::onPacketSent(size_t bytesSent) {
+#ifdef DEBUG_LOG
     Logger::log("Debug: PacketGenerator::onPacketSent entered. Bytes sent: " + std::to_string(bytesSent));
+#endif
     if (bytesSent > 0) {
         totalBytesSent += bytesSent;
         totalPacketsSent++;
@@ -154,7 +156,9 @@ void PacketGenerator::onPacketSent(size_t bytesSent) {
         stop();
         return;
     }
+#ifdef DEBUG_LOG
     Logger::log("Debug: PacketGenerator::onPacketSent exited.");
+#endif
 }
 
 /**

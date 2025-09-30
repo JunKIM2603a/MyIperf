@@ -4,6 +4,8 @@
 #include <string>
 #include "nlohmann/json.hpp"
 
+// #define DEBUG_LOG
+
 /**
  * @enum MessageType
  * @brief Defines the different types of messages that can be exchanged.

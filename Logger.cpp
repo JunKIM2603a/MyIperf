@@ -36,8 +36,10 @@ std::thread Logger::pipeThread;
 
 // wait function for debug step
 void DebugPause(const std::string& message) {
+#ifdef DEBUG_LOG
     Logger::log(message);
     std::cout.flush();
+#endif
 }
 
 /**
@@ -95,12 +97,12 @@ void Logger::pipeWorker() {
         std::cerr << "Debug: pipeWorker - Creating named pipe.\n";
         hPipe = CreateNamedPipeA(
             pipeName.c_str(),
-            PIPE_ACCESS_OUTBOUND,
+            PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1, // Only one instance
             4096, // Output buffer size
             4096, // Input buffer size
-            0,    // Default timeout
+            NMPWAIT_USE_DEFAULT_WAIT,    // Default timeout for client to wait, not for server
             NULL);
 
         if (hPipe == INVALID_HANDLE_VALUE) {
@@ -112,7 +114,28 @@ void Logger::pipeWorker() {
 
         Logger::log("Info: Named pipe '" + pipeName + "' created. Waiting for a client to connect...");
         std::cerr << "Debug: pipeWorker - Calling ConnectNamedPipe.\n";
-        bool connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        OVERLAPPED ov = {0};
+        ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+        bool connected = ConnectNamedPipe(hPipe, &ov);
+        while (!connected && running)  {
+            DWORD err = GetLastError();
+            if (err == ERROR_IO_PENDING) {
+                // 이제 timeout을 걸고 기다릴 수 있음
+                DWORD waitRes = WaitForSingleObject(ov.hEvent, 1000); // 5초 대기
+                if (waitRes == WAIT_OBJECT_0) {
+                    // 연결 성공
+                    connected = TRUE;
+                } else if (waitRes == WAIT_TIMEOUT) {
+                    // 타임아웃 → 연결 실패 처리
+                    CancelIo(hPipe);
+                    connected = FALSE;
+                }
+            } else if (err == ERROR_PIPE_CONNECTED) {
+                // 이미 연결된 상태
+                connected = TRUE;
+            }
+        }
+        // bool connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
         std::cerr << "Debug: pipeWorker - ConnectNamedPipe returned. Connected: " + std::to_string(connected) + "\n";
 
         if (connected && running) {
@@ -229,7 +252,7 @@ void Logger::stop() {
     cv.notify_all();
 
     // Give logWorker a chance to process remaining messages and exit its loop
-    std::this_thread::sleep_for(std::chrono::milliseconds(200)); // ADDED DELAY
+    // std::this_thread::sleep_for(std::chrono::milliseconds(200)); // ADDED DELAY
 
 #ifdef _WIN32
     Logger::log("Debug: Logger::stop() - Attempting to unblock pipeThread.");
@@ -257,25 +280,26 @@ void Logger::stop() {
     if (workerThread.joinable()) {
         workerThread.join();
     }
-    Logger::log("Debug: Logger::stop() - workerThread joined.");
+    std::cout << "Debug: Logger::stop() - workerThread joined.\n";
 
 #ifdef _WIN32
     // Windows 환경에서만 pipeThread를 join합니다.
-    Logger::log("Debug: Logger::stop() - Joining pipeThread.");
+    std::cout << "Debug: Logger::stop() - Joining pipeThread.\n";
     if (pipeThread.joinable()) {
+        std::cout << "Debug: Logger::stop() - pipeThread joinable.\n";
         pipeThread.join();
     }
-    Logger::log("Debug: Logger::stop() - pipeThread joined.");
+    std::cout << "Debug: Logger::stop() - pipeThread joined.\n";
 #endif
 
     if (saveToFile && logStream.is_open()) {
         Logger::log("Debug: Logger::stop() - Flushing and closing logStream.");
         logStream.flush();
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(100));
         logStream.close();
         Logger::log("Debug: Logger::stop() - logStream closed.");
     }
-    Logger::log("Debug: Logger::stop() finished.");
+    std::cout << "Debug: Logger::stop() finished.\n";
 }
 
 /**
@@ -304,19 +328,30 @@ void Logger::log(const std::string& message) {
 void Logger::logWorker() {
     std::cerr << "Debug: logWorker started.\n";
     while (true) {
+#ifdef DEBUG_LOG
         std::cerr << "Debug: logWorker loop - top.\n";
+#endif
         std::deque<std::string> writeQueue;
         {
             std::unique_lock<std::mutex> lock(queueMutex);
             cv.wait(lock, [] { return !messageQueue.empty() || !running; });
             if (!running && messageQueue.empty()) {
-                // Logger::log("Debug: logWorker - Exiting loop (not running and queue empty)."); // REMOVED
+                std::cerr << "Debug: logWorker - Exiting loop (not running and queue empty).\n"; // REMOVED
                 break;
             }
             writeQueue.swap(messageQueue);
+#ifdef DEBUG_LOG
             std::cerr << "Debug: logWorker - Message queue swapped. Count: " + std::to_string(writeQueue.size()) + "\n";
+#endif
         }
 
+#ifndef DEBUG_LOG
+        // bool isDebug = false;
+        // std::ostringstream oss_debug;
+        // for(auto iter = writeQueue.begin(); iter != writeQueue.end(); ++iter) {
+        //     if(iter->rfind("Debug:", 0) == 0) writeQueue.erase(iter);
+        // }
+#endif
         for (const auto& msg : writeQueue) {
             auto now = std::chrono::system_clock::now();
             std::time_t now_c = std::chrono::system_clock::to_time_t(now);
@@ -349,9 +384,11 @@ void Logger::logWorker() {
             }
 #endif
         }
+#ifdef DEBUG_LOG
         std::cerr << "Debug: logWorker loop - bottom.\n";
+#endif
     }
-    // Logger::log("Debug: logWorker finished."); // REMOVED
+    std::cerr <<"Debug: logWorker finished.\n"; // REMOVED
 }
 
 /**

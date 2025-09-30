@@ -105,7 +105,9 @@ void PacketReceiver::resetStats() {
  * If the receiver is running, it requests the network interface to receive data.
  */
 void PacketReceiver::receiveNextPacket() {
+#ifdef DEBUG_LOG
     Logger::log("Debug: PacketReceiver::receiveNextPacket called.");
+#endif
     if (!running) {
         return;
     }
@@ -124,7 +126,9 @@ void PacketReceiver::onPacketReceived(const std::vector<char>& data, size_t byte
     if (!running) return;
 
     if (bytesReceived > 0) {
+#ifdef DEBUG_LOG
         Logger::log("Debug: onPacketReceived - bytesReceived=" + std::to_string(bytesReceived));
+#endif
         // Append the newly received data to our internal buffer.
         m_receiveBuffer.insert(m_receiveBuffer.end(), data.begin(), data.begin() + bytesReceived);
         processBuffer();
@@ -200,8 +204,10 @@ void PacketReceiver::processBuffer() {
             }
 
             if (onPacketCallback) {
+#ifdef DEBUG_LOG
                 Logger::log("Debug: PacketReceiver::processBuffer - Dispatching packet. Message Type: " + std::to_string(static_cast<int>(header->messageType)) + ", Packet Counter: " + std::to_string(header->packetCounter)
                 + ", payloadSize: " + std::to_string(header->payloadSize));
+#endif
                 if(header->messageType == MessageType::DATA_PACKET){
                     m_endTime = std::chrono::steady_clock::now(); 
                 }
