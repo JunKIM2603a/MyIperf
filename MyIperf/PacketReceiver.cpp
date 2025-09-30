@@ -170,7 +170,9 @@ void PacketReceiver::processBuffer() {
 
         // Check if the complete packet has been received.
         if (m_receiveBuffer.size() < totalPacketSize) {
+#ifdef DEBUG_LOG
             Logger::log("Debug: processBuffer - incomplete packet, have=" + std::to_string(m_receiveBuffer.size()) + ", need=" + std::to_string(totalPacketSize));
+#endif
             break; // Incomplete packet, wait for more data.
         }
 
