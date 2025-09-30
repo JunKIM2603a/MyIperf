@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
     // Stop the logger service, ensuring all messages are flushed.
     Logger::stop();
     
-    std::this_thread::sleep_for(std::chrono::seconds(10)); // ADDED DELAY for debug pipe communication
+    // std::this_thread::sleep_for(std::chrono::seconds(10)); // ADDED DELAY for debug pipe communication
     std::cout << "=============== END ==============\n"<< std::endl;
     return 0;
 }
