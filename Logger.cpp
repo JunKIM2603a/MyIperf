@@ -173,6 +173,7 @@ void Logger::start(const Config& config) {
     }
 #endif
 
+    std::ostringstream time;
     if (config.getSaveLogs()) {
         saveToFile = true;
         if (!std::filesystem::exists(logDirectory)) {
@@ -185,6 +186,7 @@ void Logger::start(const Config& config) {
         std::ostringstream name;
         name << logDirectory << "/ipeftc_" << mode << "_"
              << std::put_time(&local_tm, "%Y%m%d_%H%M%S") << "_";
+        time << std::put_time(&local_tm, "%Y%m%d_%H%M%S");
 #ifdef _WIN32
         name << GetCurrentProcessId();
 #else
@@ -199,6 +201,17 @@ void Logger::start(const Config& config) {
     }
 
     workerThread = std::thread(logWorker);
+    Logger::log("Info: Logger started " + time.str());
+    std::ostringstream logStream;
+        logStream << " --mode " << (config.getMode() == Config::TestMode::CLIENT ? "CLIENT" : "SERVER")
+        << " --target " << config.getTargetIP()
+        << " --port " << std::to_string(config.getPort())
+        << " --packet-size " << std::to_string(config.getPacketSize())
+        << " --num-packets " << std::to_string(config.getNumPackets())
+        << " --interval-ms " << std::to_string(config.getSendIntervalMs())
+        << " --save-logs " << (config.getSaveLogs() ? "true" : "false");
+    Logger::log("Info: Options =>" + logStream.str());
+
 #ifdef _WIN32
     pipeThread = std::thread(pipeWorker);
 #endif

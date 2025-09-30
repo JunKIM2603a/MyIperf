@@ -1,0 +1,18 @@
+{
+    "_comments_mode": [
+        "mode: 'CLIENT' or 'SERVER'.",
+        "This is often ignored when set in a file,",
+        "as the --mode command-line flag is mandatory and takes precedence.",
+        "Included here for completeness."
+    ],
+    "mode": "SERVER",
+
+    "_comment_targetIP": "The IP address of the server to connect to.",
+    "targetIP": "127.0.0.1",
+
+    "_comment_port": "The port number for the connection. Must match the server.",
+    "port": 5201,
+
+    "_comment_saveLogs": "Whether to save console output to a log file in the 'Log' directory.",
+    "saveLogs": true
+}

@@ -23,6 +23,13 @@ void CLIHandler::run(int argc, char* argv[]) {
     if (argc < 2) {
         printHelp();
         exit(0);
+    }else{
+        std::string allArgs = "Info: Options => ";
+        for (int i = 1; i < argc; ++i) { // argv[0] is program 
+            allArgs += argv[i];
+            if (i != argc - 1) allArgs += " "; 
+        }
+        std::cout << allArgs << std::endl;
     }
 
     try {
