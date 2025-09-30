@@ -3,7 +3,7 @@ name: Build & Release (Multi-Project)
 on:
   push:
     tags:
-      - 'v*'   # v1.0, v2.0 같은 태그 push 시 동작
+      - 'v*'   # v1.0, v2.0 등 태그 push 시 실행
 
 permissions:
   contents: write
@@ -29,12 +29,16 @@ jobs:
         working-directory: MyIperf
         run: cmake --build build --target IPEFTC -- -j4
 
+      - name: Ensure bin directory exists
+        run: mkdir -Force MyIperf/build/bin
+
       - name: Rename & Zip MyIperf exe with version
-        working-directory: MyIperf/build/bin
         run: |
           $version = "${{ github.ref_name }}"
-          Rename-Item IPEFTC.exe ("MyIperf-$version.exe")
+          Rename-Item "IPEFTC.exe" -NewName "MyIperf-$version.exe"
           Compress-Archive -Path "MyIperf-$version.exe" -DestinationPath "MyIperf-$version.zip"
+        shell: pwsh
+        working-directory: MyIperf/build/bin
 
       - name: Upload artifact (MyIperf)
         uses: actions/upload-artifact@v4
@@ -64,12 +68,16 @@ jobs:
         working-directory: MyIperf_Pipe
         run: cmake --build build --target consumer -- -j4
 
+      - name: Ensure bin directory exists
+        run: mkdir -Force MyIperf_Pipe/build
+
       - name: Rename & Zip MyIperf_Pipe exe with version
-        working-directory: MyIperf_Pipe/build
         run: |
           $version = "${{ github.ref_name }}"
-          Rename-Item consumer.exe ("MyIperf_Pipe-$version.exe")
+          Rename-Item "consumer.exe" -NewName "MyIperf_Pipe-$version.exe"
           Compress-Archive -Path "MyIperf_Pipe-$version.exe" -DestinationPath "MyIperf_Pipe-$version.zip"
+        shell: pwsh
+        working-directory: MyIperf_Pipe/build
 
       - name: Upload artifact (MyIperf_Pipe)
         uses: actions/upload-artifact@v4
