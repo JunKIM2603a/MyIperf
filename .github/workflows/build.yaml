@@ -29,24 +29,20 @@ jobs:
         working-directory: MyIperf
         run: cmake --build build --target IPEFTC -- -j4
 
-      - name: Ensure Release directory exists
-        run: mkdir -Force MyIperf/build/Release
-
       - name: Rename & Zip MyIperf exe with version
+        working-directory: MyIperf/build
         run: |
           $version = "${{ github.ref_name }}"
-          Rename-Item "IPEFTC.exe" -NewName "MyIperf-$version.exe"
+          Rename-Item IPEFTC.exe ("MyIperf-$version.exe")
           Compress-Archive -Path "MyIperf-$version.exe" -DestinationPath "MyIperf-$version.zip"
-        shell: pwsh
-        working-directory: MyIperf/build/Release
 
       - name: Upload artifact (MyIperf)
         uses: actions/upload-artifact@v4
         with:
           name: MyIperf
           path: |
-            MyIperf/build/Release/MyIperf-*.exe
-            MyIperf/build/Release/MyIperf-*.zip
+            MyIperf/build/MyIperf-*.exe
+            MyIperf/build/MyIperf-*.zip
 
   build-MyIperf_Pipe:
     runs-on: windows-latest
