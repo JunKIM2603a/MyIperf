@@ -29,6 +29,8 @@ set "SERVER_IP=0.0.0.0"
 set "CLIENT_TARGET_IP=127.0.0.1"
 set "PORTS=60000"
 set "EXPECTED_PROCESS_COUNT=2"
+rem set PORTS=60000 60001 60002 60003 60004
+rem set EXPECTED_PROCESS_COUNT=10
 
 rem --- Argument Validation ---
 if "%~4"=="" (
