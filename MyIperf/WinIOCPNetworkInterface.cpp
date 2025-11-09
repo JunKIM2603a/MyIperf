@@ -344,8 +344,11 @@ void WinIOCPNetworkInterface::asyncReceive(size_t bufferSize, RecvCallback callb
         int error = WSAGetLastError();
         if (error != WSA_IO_PENDING) {
             Logger::log("Error: WSARecv failed with error: " + std::to_string(error) + " - " + getErrorMessage(error));
+            if (ioData->recvCallback) {
+                ioData->recvCallback({}, 0); // Signal failure to PacketReceiver
+            }
             delete ioData;
-            callback({}, 0);
+            return;
         }
     }
 }
@@ -424,6 +427,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
 #endif                
                 std::vector<char> receivedData(ioData->buffer, ioData->buffer + bytesTransferred);
                 ioData->recvCallback(receivedData, bytesTransferred);
+                delete ioData;
                 break;
             }
             case OperationType::Send: {
@@ -431,6 +435,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                 Logger::log("Debug: Send operation completed. Bytes transferred: " + std::to_string(bytesTransferred));
 #endif
                 ioData->sendCallback(bytesTransferred);
+                delete ioData;
                 break;
             }
             case OperationType::Accept: {
@@ -456,6 +461,7 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                         ioData->acceptCallback(true, clientIp, ntohs(addr.sin_port));
                     }
                 }
+                delete ioData;
                 break;
             }
             case OperationType::Connect: {
@@ -467,10 +473,10 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                     Logger::log("Info: Successfully connected to the server.");
                     ioData->connectCallback(true);
                 }
+                delete ioData;
                 break;
             }
         }
-        delete ioData;
     }
     Logger::log("Info: IOCP worker thread stopping.");
 }

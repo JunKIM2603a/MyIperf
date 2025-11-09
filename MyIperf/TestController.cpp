@@ -53,6 +53,7 @@ const char* stateToString(TestController::State state) {
         case TestController::State::WAITING_FOR_SERVER_FIN: return "WAITING_FOR_SERVER_FIN";
         case TestController::State::SERVER_TEST_FINISHING: return "SERVER_TEST_FINISHING";
         case TestController::State::EXCHANGING_SERVER_STATS: return "EXCHANGING_SERVER_STATS";
+        case TestController::State::WAITING_FOR_SHUTDOWN_ACK: return "WAITING_FOR_SHUTDOWN_ACK";
         case TestController::State::FINISHED: return "FINISHED";
         case TestController::State::ERRORED: return "ERRORED";
         default: return "UNKNOWN";
@@ -73,6 +74,7 @@ const char* MessageTypeToString(MessageType type) {
         case MessageType::STATS_ACK: return "STATS_ACK";
         case MessageType::TEST_FIN: return "TEST_FIN";
         case MessageType::CLIENT_READY: return "CLIENT_READY";
+        case MessageType::SHUTDOWN_ACK: return "SHUTDOWN_ACK";
         default: return "UNKNOWN";
     }
 }
@@ -406,6 +408,11 @@ void TestController::transitionTo_nolock(State newState) {
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             break;
         }
+        case State::WAITING_FOR_SHUTDOWN_ACK: {
+            Logger::log("Info: Server waiting for client's final shutdown acknowledgment.");
+            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
+            break;
+        }
         case State::FINISHED: {
             Logger::log("Info: Test finished successfully. Shutting down.");
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
@@ -494,15 +501,15 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         networkInterface->asyncSend(ackPacket, [this](size_t bytesSent) {
                             if (bytesSent > 0) {
                                 Logger::log("Info: Server sent config ACK.");
-                                transitionTo(State::RUNNING_TEST);
+                                transitionTo_nolock(State::RUNNING_TEST);
                             } else {
                                 Logger::log("Error: Server failed to send config ACK.");
-                                transitionTo(State::ERRORED);
+                                transitionTo_nolock(State::ERRORED);
                             }
                         });
                     } catch (const std::exception& e) {
                         Logger::log("Error: Failed to process config packet: " + std::string(e.what()));
-                        transitionTo(State::ERRORED);
+                        transitionTo_nolock(State::ERRORED);
                     }
                 }
                 break;
@@ -523,6 +530,13 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                 if (currentState == State::RUNNING_TEST) {
                     Logger::log("Info: Server received TEST_FIN from client. Replying and finishing.");
                     transitionTo_nolock(State::FINISHING);
+                }
+                break;
+            case MessageType::SHUTDOWN_ACK:
+                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
+                if (currentState == State::WAITING_FOR_SHUTDOWN_ACK) {
+                    Logger::log("Info: Server received final shutdown ACK from client.");
+                    transitionTo_nolock(State::FINISHED);
                 }
                 break;
             case MessageType::STATS_EXCHANGE: {
@@ -560,9 +574,16 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
                     }
 
-                    networkInterface->asyncSend(packet, [this](size_t) {
-                        Logger::log("Info: Server sent STATS_ACK with its stats.");
-                        transitionTo(State::WAITING_FOR_CLIENT_READY);
+                    // Transition before the async send to prevent a race condition where the client's
+                    // CLIENT_READY arrives before the server has transitioned to WAITING_FOR_CLIENT_READY.
+                    transitionTo_nolock(State::WAITING_FOR_CLIENT_READY);
+                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
+                        if (bytesSent > 0) {
+                            Logger::log("Info: Server sent STATS_ACK with its stats.");
+                        } else {
+                            Logger::log("Error: Server failed to send STATS_ACK.");
+                            transitionTo_nolock(State::ERRORED);
+                        }
                     });
                 } else if (currentState == State::SERVER_TEST_FINISHING) {
                     Logger::log("Info: Server received STATS_EXCHANGE from client for server-to-client test.");
@@ -597,9 +618,14 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
                     }
 
-                    networkInterface->asyncSend(packet, [this](size_t) {
-                        Logger::log("Info: Server sent final STATS_ACK with its generator stats.");
-                        transitionTo(State::FINISHED);
+                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
+                        if (bytesSent > 0) {
+                            Logger::log("Info: Server sent final STATS_ACK with its generator stats.");
+                            transitionTo_nolock(State::WAITING_FOR_SHUTDOWN_ACK);
+                        } else {
+                            Logger::log("Error: Server failed to send final STATS_ACK.");
+                            transitionTo_nolock(State::ERRORED);
+                        }
                     });
                 } else {
                     Logger::log("Warning: Received STATS_EXCHANGE in unexpected state: " + std::string(stateToString(currentState)));
@@ -704,7 +730,23 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     } catch (const std::exception& e) {
                         Logger::log("Warning: Could not parse final server stats: " + std::string(e.what()));
                     }
-                    transitionTo_nolock(State::FINISHED);
+                    
+                    // Graceful shutdown: send final ACK to server
+                    PacketHeader shutdownHeader{};
+                    shutdownHeader.startCode = PROTOCOL_START_CODE;
+                    shutdownHeader.messageType = MessageType::SHUTDOWN_ACK;
+                    std::vector<char> shutdownPacket(sizeof(PacketHeader));
+                    memcpy(shutdownPacket.data(), &shutdownHeader, sizeof(PacketHeader));
+
+                    networkInterface->asyncSend(shutdownPacket, [this](size_t bytesSent) {
+                        if (bytesSent > 0) {
+                            Logger::log("Info: Client sent final SHUTDOWN_ACK.");
+                        } else {
+                            Logger::log("Warning: Client failed to send final SHUTDOWN_ACK.");
+                        }
+                        // In either case, the client's job is done.
+                        transitionTo_nolock(State::FINISHED);
+                    });
                 }
                 break;
             case MessageType::DATA_PACKET:

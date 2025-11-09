@@ -48,6 +48,7 @@ public:
         WAITING_FOR_SERVER_FIN,   // Client is waiting for server to finish
         SERVER_TEST_FINISHING,    // Server-to-client test is wrapping up
         EXCHANGING_SERVER_STATS,  // Final stats exchange initiated by server
+        WAITING_FOR_SHUTDOWN_ACK, // Server waits for client's final ACK before closing
 
         FINISHED,           // The test has completed successfully.
         ERRORED             // An unrecoverable error occurred.
