@@ -215,6 +215,11 @@ void PacketReceiver::processBuffer() {
                 }
                 onPacketCallback(*header, payload_vec);
             }
+            if (header->messageType == MessageType::DATA_PACKET) {
+                Logger::log("Info: PacketReceiver received DATA_PACKET " + std::to_string(header->packetCounter) + 
+                            " (size: " + std::to_string(totalPacketSize) + " bytes)");
+            }
+
             // Safely update stats under a lock.
             std::lock_guard<std::mutex> lock(statsMutex);
             // Only count data packets for total bytes and packets received

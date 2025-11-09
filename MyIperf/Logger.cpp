@@ -66,10 +66,11 @@ void Logger::manageLogRotation(const std::string& mode) {
         }
     }
 
-    if (logFiles.size() >= 10) {
+    const unsigned int maxFiles = 100;
+    if (logFiles.size() >= maxFiles) {
         std::sort(logFiles.begin(), logFiles.end());
 
-        int filesToDelete = logFiles.size() - 9;
+        int filesToDelete = logFiles.size() - (maxFiles - 1);
         for (int i = 0; i < filesToDelete; ++i) {
             std::filesystem::remove(logFiles[i]);
         }
@@ -87,14 +88,18 @@ void Logger::manageLogRotation(const std::string& mode) {
 void Logger::pipeWorker() {
     std::cerr << "Debug: pipeWorker started.\n";
     while (running) {
+#ifdef DEBUG_PIPE 
         std::cerr << "Debug: pipeWorker loop - top.\n";
+#endif
         if (pipeName.empty()) { // Don't start until pipe name is set
             std::cerr << "Debug: pipeWorker - pipeName is empty, waiting.\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
+#ifdef DEBUG_PIPE 
         std::cerr << "Debug: pipeWorker - Creating named pipe.\n";
+#endif        
         hPipe = CreateNamedPipeA(
             pipeName.c_str(),
             PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
@@ -112,8 +117,10 @@ void Logger::pipeWorker() {
             continue;
         }
 
+#ifdef DEBUG_PIPE 
         Logger::log("Info: Named pipe '" + pipeName + "' created. Waiting for a client to connect...");
         std::cerr << "Debug: pipeWorker - Calling ConnectNamedPipe.\n";
+#endif
         OVERLAPPED ov = {0};
         ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         bool connected = ConnectNamedPipe(hPipe, &ov);
@@ -136,22 +143,30 @@ void Logger::pipeWorker() {
             }
         }
         // bool connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+#ifdef DEBUG_PIPE        
         std::cerr << "Debug: pipeWorker - ConnectNamedPipe returned. Connected: " + std::to_string(connected) + "\n";
+#endif
 
         if (connected && running) {
+#ifdef DEBUG_PIPE 
             Logger::log("Info: Client connected to named pipe '" + pipeName + "'.");
+#endif
             pipeConnected = true;
             while (pipeConnected && running) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
+#ifdef DEBUG_PIPE   
             std::cerr << "Debug: pipeWorker - Inner connected loop exited.\n";
+#endif
         } else {
             pipeConnected = false;
             std::cerr << "Debug: pipeWorker - Not connected or running is false.\n";
         }
 
         if(hPipe != INVALID_HANDLE_VALUE) {
+#ifdef DEBUG_PIPE   
             std::cerr << "Debug: pipeWorker - Disconnecting and closing pipe handle.\n";
+#endif
             DisconnectNamedPipe(hPipe);
             CloseHandle(hPipe);
             hPipe = INVALID_HANDLE_VALUE;
@@ -161,7 +176,9 @@ void Logger::pipeWorker() {
              Logger::log("Info: Client disconnected from named pipe '" + pipeName + "'.");
         }
         pipeConnected = false;
+#ifdef DEBUG_PIPE   
         std::cerr << "Debug: pipeWorker loop - bottom.\n";
+#endif
     }
     std::cerr << "Debug: pipeWorker finished.\n";
 }
@@ -378,7 +395,9 @@ void Logger::logWorker() {
                 DWORD bytesWritten = 0;
                 bool success = WriteFile(hPipe, out.c_str(), out.length(), &bytesWritten, NULL);
                 if (!success) {
+#ifdef DEBUG_PIPE   
                     std::cerr << "Debug: logWorker - WriteFile to pipe failed. Error: " + std::to_string(GetLastError()) + "\n";
+#endif
                     pipeConnected = false;
                 }
             }

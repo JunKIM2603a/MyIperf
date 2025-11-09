@@ -107,6 +107,7 @@ void PacketGenerator::sendNextPacket() {
 
     // 5. Increment the counter for the next packet.
     packetCounter++;
+    Logger::log("Info: PacketGenerator sent packet " + std::to_string(packetCounter -1) + " (size: " + std::to_string(packetSize) + " bytes)");
 }
 
 /**

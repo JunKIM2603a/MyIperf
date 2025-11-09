@@ -3,6 +3,7 @@
 #include "ConfigParser.h"
 #ifdef _WIN32
 #include "WinIOCPNetworkInterface.h"
+#include <winsock2.h> // For WSAEADDRINUSE
 #else
 #include "LinuxAsyncNetworkInterface.h"
 #endif
@@ -80,20 +81,20 @@ const char* MessageTypeToString(MessageType type) {
  * @brief Constructs the TestController.
  * Initializes network interface, generator, receiver, and the state timeout timer.
  */
-TestController::TestController() : currentState(State::IDLE), m_stopped(false), m_expectedDataPacketCounter(0), testCompletionPromise_set(false), m_cliBlockFlag(false) {
+TestController::TestController() {
     std::cerr << "DEBUG: Entering TestController::TestController()\n";
-    std::cerr << "DEBUG: TestController::TestController() - Before networkInterface creation.\n"; // NEW LOG
     // Select the appropriate network interface based on the operating system.
 #ifdef _WIN32
     networkInterface = std::make_unique<WinIOCPNetworkInterface>();
 #else
     networkInterface = std::make_unique<LinuxAsyncNetworkInterface>();
 #endif
-    std::cerr << "DEBUG: TestController::TestController() - After networkInterface creation.\n"; // NEW LOG
     // Initialize the core components.
     packetGenerator = std::make_unique<PacketGenerator>(networkInterface.get());
     packetReceiver = std::make_unique<PacketReceiver>(networkInterface.get());
-    std::cerr << "DEBUG: TestController::TestController() - Finished.\n"; // NEW LOG
+    
+    reset(); // Set initial state
+    std::cerr << "DEBUG: TestController::TestController() - Finished.\n";
 }
 
 /**
@@ -103,6 +104,36 @@ TestController::TestController() : currentState(State::IDLE), m_stopped(false), 
 TestController::~TestController() {
     stopTest();
 }
+
+/**
+ * @brief Resets all member variables to their initial state for a new test.
+ */
+void TestController::reset() {
+    currentState = State::IDLE;
+    m_stopped = false;
+    m_expectedDataPacketCounter = 0;
+    testCompletionPromise_set = false;
+    m_cliBlockFlag = false;
+    m_contentMismatchCount = 0;
+
+    currentConfig = Config(); // Reset to default config
+    m_remoteStats = {};
+    m_clientStatsPhase1 = {};
+    m_serverStatsPhase1 = {};
+    m_clientStatsPhase2 = {};
+    m_serverStatsPhase2 = {};
+
+    if (packetGenerator) {
+        packetGenerator->resetStats();
+    }
+    if (packetReceiver) {
+        packetReceiver->resetStats();
+    }
+    
+    // Re-create the promise for the next test run
+    testCompletionPromise = std::promise<void>();
+}
+
 
 nlohmann::json TestController::parseStats(const std::vector<char>& payload) const {
     std::string stats_str(payload.begin(), payload.end());
@@ -115,9 +146,9 @@ nlohmann::json TestController::parseStats(const std::vector<char>& payload) cons
  */
 void TestController::startTest(const Config& config) {
     std::cerr << "DEBUG: Entering TestController::startTest()\n";
-    testCompletionPromise = std::promise<void>(); // Reset the completion promise for the new test.
-    testCompletionPromise_set = false; // Reset flag for new test.
-    m_cliBlockFlag = false; // Reset for new test.
+    
+    reset(); // Reset all state variables for a clean test run.
+
     this->currentConfig = config; // Store the configuration for this session.
 
     std::string logMessage = "Info: Starting test in ";
@@ -135,11 +166,14 @@ void TestController::startTest(const Config& config) {
 #ifdef _WIN32
         WinIOCPNetworkInterface* winInterface = static_cast<WinIOCPNetworkInterface*>(networkInterface.get());
         if (!winInterface->setupListeningSocket(config.getTargetIP(), config.getPort())) {
-            Logger::log("Error: Failed to set up listening socket.");
+            if (WSAGetLastError() == WSAEADDRINUSE) {
+                Logger::log("Error: Failed to set up listening socket. The port " + std::to_string(config.getPort()) + " is already in use.");
+            } else {
+                Logger::log("Error: Failed to set up listening socket.");
+            }
             transitionTo(State::ERRORED);
             return;
         }
-        
 #endif
         transitionTo(State::ACCEPTING);
     } else { // Client mode
@@ -428,7 +462,7 @@ void TestController::transitionTo_nolock(State newState) {
             Logger::log("Warning: Unhandled state transition: " + std::string(stateToString(newState)));
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
             break;
-    }
+}
 }
 
 /**

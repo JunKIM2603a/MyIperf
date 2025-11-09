@@ -5,6 +5,7 @@
 #include "nlohmann/json.hpp"
 
 // #define DEBUG_LOG
+// #define DEBUG_PIPE
 
 /**
  * @enum MessageType

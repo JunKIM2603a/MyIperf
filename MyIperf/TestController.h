@@ -132,6 +132,11 @@ private:
     
 
     /**
+     * @brief Resets the controller to a clean state for a new test.
+     */
+    void reset();
+
+    /**
      * @brief Callback for handling packets received from the PacketReceiver.
      * @param header The header of the received packet.
      * @param payload The payload of the received packet.
