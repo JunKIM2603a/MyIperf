@@ -14,9 +14,6 @@
  * @return 0 on successful execution, non-zero otherwise.
  */
 int main(int argc, char* argv[]) {
-    std::cerr << "DEBUG: Entering main()\n";
-
-
     // Iterate through all command-line arguments.
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -49,6 +46,6 @@ int main(int argc, char* argv[]) {
     Logger::stop();
     
     // std::this_thread::sleep_for(std::chrono::seconds(10)); // ADDED DELAY for debug pipe communication
-    std::cout << "=============== END ==============\n"<< std::endl;
+    std::cout << "=============== END ================\n"<< std::endl;
     return 0;
 }

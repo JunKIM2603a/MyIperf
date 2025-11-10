@@ -17,8 +17,6 @@ CLIHandler::CLIHandler(TestController& controller) : testController(controller) 
  * @param argv Argument values.
  */
 void CLIHandler::run(int argc, char* argv[]) {
-    std::cerr << "DEBUG: Entering CLIHandler::run()\n";
-
     // If no arguments are provided, display help and exit.
     if (argc < 2) {
         printHelp();

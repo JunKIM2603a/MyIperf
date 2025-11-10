@@ -49,6 +49,9 @@ public:
         SERVER_TEST_FINISHING,    // Server-to-client test is wrapping up
         EXCHANGING_SERVER_STATS,  // Final stats exchange initiated by server
         WAITING_FOR_SHUTDOWN_ACK, // Server waits for client's final ACK before closing
+        SENDING_SHUTDOWN_ACK, // Client sends the final shutdown acknowledgment
+
+        WAITING_FOR_REPLY,  // Waiting for a reply to a message, with retry logic
 
         FINISHED,           // The test has completed successfully.
         ERRORED             // An unrecoverable error occurred.
@@ -130,7 +133,19 @@ private:
     /** @brief Flag to ensure stopTest() logic is executed only once. */
     std::atomic<bool> m_stopped;
 
-    
+    // --- Retry and Timeout Mechanism ---
+    int m_maxRetries = 3; // Maximum number of retries
+    std::chrono::seconds m_retryDelay{5}; // Delay between retries
+    int m_retryCount = 0; // Current retry count
+
+    std::thread m_timerThread; // Thread for handling timeouts
+    std::mutex m_timerMutex;
+    std::condition_variable m_timerCv;
+    bool m_stopTimer = false;
+
+    std::vector<char> m_lastPacket; // The last packet sent, for retries
+    State m_nextState; // The state to transition to upon successful acknowledgment
+    MessageType m_expectedReply; // The expected message type for the reply
 
     /**
      * @brief Resets the controller to a clean state for a new test.
@@ -169,6 +184,29 @@ private:
      * This function is NOT thread-safe and must be called only when the state machine mutex is already held.
      */
     void transitionTo_nolock(State newState);
+
+    /**
+     * @brief Sends a packet and sets up for a retry if no acknowledgment is received.
+     * @param packet The packet to send.
+     * @param nextState The state to transition to on success.
+     * @param expectedReply The expected reply message type.
+     */
+    void sendMessageWithRetry(const std::vector<char>& packet, State nextState, MessageType expectedReply);
+
+    /**
+     * @brief The timer function that handles timeouts and retries.
+     */
+    void handleTimeout();
+
+    /**
+     * @brief Starts the timeout timer.
+     */
+    void startTimer();
+
+    /**
+     * @brief Stops the timeout timer.
+     */
+    void stopTimer();
 
     /**
      * @brief Cancels any outstanding state timers (no-op placeholder).

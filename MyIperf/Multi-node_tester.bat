@@ -65,7 +65,7 @@ for /L %%i in (1, 1, %REPETITIONS%) do (
     )
 
     echo Waiting for servers to initialize...
-    timeout /t 3 /nobreak > nul
+    rem timeout /t 3 /nobreak > nul
 
     rem Start all clients in the background
     for %%p in (%PORTS%) do (
@@ -79,7 +79,7 @@ for /L %%i in (1, 1, %REPETITIONS%) do (
     call :VerifyAndWaitForProcesses %%i
     
     echo --- Iteration %%i finished ---
-    timeout /t 1 /nobreak > nul
+    rem timeout /t 1 /nobreak > nul
 )
 
 echo =================================================
@@ -87,7 +87,7 @@ echo All test iterations completed.
 echo =================================================
 echo.
 echo Adding a 5-second delay for file system to settle...
-timeout /t 5 /nobreak > nul
+rem timeout /t 5 /nobreak > nul
 echo.
 
 echo =================================================
@@ -140,7 +140,7 @@ rem Subroutine to verify process startup and wait for them to complete.
 rem %1: The current iteration number (for display purposes)
 rem ==============================================================================
 echo Verifying process startup for iteration %1...
-timeout /t 3 /nobreak > nul
+rem timeout /t 3 /nobreak > nul
 set "process_count=0"
 for /f %%a in ('tasklist /FI "IMAGENAME eq IPEFTC.exe" ^| find /c "IPEFTC.exe"') do set "process_count=%%a"
 
@@ -155,7 +155,7 @@ echo Waiting for all tests to complete for iteration %1...
 :waitloop_sub
 tasklist /FI "IMAGENAME eq IPEFTC.exe" 2>NUL | find /I /N "IPEFTC.exe" > NUL
 if "%ERRORLEVEL%"=="0" (
-    timeout /t 5 /nobreak > nul
+    timeout /t 1 /nobreak > nul
     goto :waitloop_sub
 )
 exit /b
