@@ -51,13 +51,20 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
  */
 void PacketGenerator::stop() {
     Logger::log("Debug: PacketGenerator::stop entered.");
-    if (!running.exchange(false)) { // Atomically set running to false and get the old value.
-        return; // Already stopped.
-    }
-    m_cv.notify_one(); // Wake up the generator thread if it's sleeping
+
+    // 절대적으로 running 플래그를 false로 설정하고 스레드 알림
+    running.store(false);
+    m_cv.notify_one();
+
+    // 스레드가 joinable이면 항상 join
     if (m_generatorThread.joinable()) {
-        m_generatorThread.join();
+        try {
+            m_generatorThread.join();
+        } catch (...) {
+            Logger::log("Error: Exception while joining generator thread.");
+        }
     }
+
     m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketGenerator stopped.");
     Logger::log("Debug: PacketGenerator::stop exited.");
