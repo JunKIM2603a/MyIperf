@@ -51,9 +51,8 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
  */
 void PacketGenerator::stop() {
     Logger::log("Debug: PacketGenerator::stop entered.");
-    if (!running.exchange(false)) { // Atomically set running to false and get the old value.
-        return; // Already stopped.
-    }
+    running.store(false);
+
     m_cv.notify_one(); // Wake up the generator thread if it's sleeping
     if (m_generatorThread.joinable()) {
         m_generatorThread.join();
