@@ -12,14 +12,20 @@
  * @brief Defines the different types of messages that can be exchanged.
  */
 enum class MessageType : uint8_t {
-    CONFIG_HANDSHAKE = 0, // Sent by the client to the server with test configuration.
-    CONFIG_ACK       = 1, // Sent by the server to the client to acknowledge configuration.
-    DATA_PACKET      = 2, // A data packet used for the performance test.
-    STATS_EXCHANGE   = 3, // Sent after the test to exchange performance statistics.
-    STATS_ACK        = 4, // An acknowledgment of receiving statistics.
-    TEST_FIN         = 5, // Sent by either side to signal completion of the test phase.
-    CLIENT_READY     = 6, // Sent by the client to signal it's ready for the server-to-client test.
-    SHUTDOWN_ACK     = 7  // Sent by the client to acknowledge the final stats and confirm shutdown.
+    // Handshake
+    CONFIG_HANDSHAKE = 0, // Client -> Server: Initial configuration
+    CONFIG_ACK       = 1, // Server -> Client: Acknowledgment of configuration
+    FINAL_ACK        = 2, // Client -> Server: Final acknowledgment of handshake
+
+    // Data Transfer
+    DATA_PACKET      = 3, // A data packet for the performance test
+    CLIENT_READY     = 4, // Client -> Server: Signals readiness for server-to-client test
+
+    // Test Control & Stats
+    TEST_FIN         = 5, // Signals completion of a test phase
+    STATS_EXCHANGE   = 6, // Exchange performance statistics after the test
+    STATS_ACK        = 7, // Acknowledgment of receiving statistics
+    SHUTDOWN_ACK     = 8  // Client -> Server: Acknowledges final stats and confirms shutdown
 };
 
 /**

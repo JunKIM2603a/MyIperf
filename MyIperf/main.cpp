@@ -169,10 +169,12 @@ int main(int argc, char* argv[]) {
     // Run the command-line handler to parse arguments and start the test.
     cli.run(argc, argv);
 
-    // Wait for the test to complete before exiting the application.
-    // This ensures all asynchronous operations have a chance to finish.
+    // Wait for the test to complete, periodically calling the controller's update method.
     Logger::log("Info: Waiting for the test to complete...");
-    controller.getTestCompletionFuture().wait();
+    auto testFuture = controller.getTestCompletionFuture();
+    while (testFuture.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+        controller.update();
+    }
 
     Logger::log("Info: IPEFTC application finished.");
     // Stop the logger service, ensuring all messages are flushed.

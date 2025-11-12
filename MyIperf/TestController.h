@@ -34,9 +34,11 @@ public:
         CONNECTING,         // Client is attempting to connect to the server.
         SENDING_CONFIG,     // Client is sending its configuration to the server.
         WAITING_FOR_ACK,    // Client is waiting for the server's acknowledgment.
+        SENDING_FINAL_ACK,  // Client is sending the final handshake acknowledgment.
         // Server-specific states
         ACCEPTING,          // Server is waiting for a client to connect.
         WAITING_FOR_CONFIG, // Server is waiting for the client's configuration.
+        WAITING_FOR_FINAL_ACK, // Server is waiting for the client's final acknowledgment.
         // Common states for both client and server
         RUNNING_TEST,       // The data transfer phase of the test is active.
         FINISHING,          // Handshake to confirm test completion before exchanging stats.
@@ -76,6 +78,11 @@ public:
     void startTest(const Config& config);
 
     /**
+     * @brief Periodically called to check for timeouts in the state machine.
+    */
+    void update();
+
+    /**
      * @brief Stops the currently running test.
      */
     void stopTest();
@@ -108,6 +115,22 @@ private:
     std::promise<void> testCompletionPromise;
     /** @brief Flag to ensure the test completion promise is set only once. */
     std::atomic<bool> testCompletionPromise_set;
+
+    // --- Handshake Retry and Timeout ---
+    /** @brief Counter for handshake message retries. */
+    int retryCount = 0;
+    /** @brief Timestamp of the last handshake packet sent to check for timeouts. */
+    std::chrono::steady_clock::time_point lastPacketSentTime;
+    /** @brief Timestamp for when the server enters an initial waiting state. */
+    std::chrono::steady_clock::time_point m_initialStateTime;
+    /** @brief Maximum number of times to retry sending a handshake message. */
+    static const int MAX_RETRIES = 5;
+    /** @brief Timeout duration for waiting for a handshake reply. */
+    static const std::chrono::seconds HANDSHAKE_TIMEOUT;
+    /** @brief Timeout for server initial states (ACCEPTING, WAITING_FOR_CONFIG). */
+    static const std::chrono::seconds INITIAL_TIMEOUT;
+
+    // --- Packet and Statistics Tracking ---
     /** @brief Counter for validating the sequence of received data packets. */
     uint32_t m_expectedDataPacketCounter;
     /** @brief Counter for payload content mismatches, used on the server side. */

@@ -72,6 +72,13 @@ public:
      */
     void resetStats();
 
+    /**
+     * @brief Manually updates statistics for a single packet.
+     * @param header The header of the packet to account for.
+     * @param payload The payload of the packet to account for.
+     */
+    void accountForPacket(const PacketHeader& header, const std::vector<char>& payload);
+
 private:
     // Private methods for internal operation
 

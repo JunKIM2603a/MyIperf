@@ -101,6 +101,52 @@ void PacketReceiver::resetStats() {
 }
 
 /**
+ * @brief Manually updates statistics for a single packet.
+ * @param header The header of the packet to account for.
+ * @param payload The payload of the packet to account for.
+ */
+void PacketReceiver::accountForPacket(const PacketHeader& header, const std::vector<char>& payload) {
+    std::lock_guard<std::mutex> lock(statsMutex);
+
+    size_t totalPacketSize = sizeof(PacketHeader) + header.payloadSize;
+
+    // This is a secondary, more rigorous check for data integrity. It rebuilds the expected
+    // payload from scratch and compares it byte-for-byte against the received payload.
+    // A mismatch here indicates a subtle data corruption that the simpler checksum failed to catch.
+    if (header.messageType == MessageType::DATA_PACKET) {
+        const std::string expected = buildExpectedPayload(header.packetCounter, header.payloadSize);
+        if (expected.size() == payload.size() && !std::equal(payload.begin(), payload.end(), expected.begin())) {
+            Logger::log("Warning: Payload content mismatch for packet " + std::to_string(header.packetCounter));
+            m_contentMismatchCount++;
+        }
+    }
+
+    if (header.messageType == MessageType::DATA_PACKET) {
+        m_endTime = std::chrono::steady_clock::now();
+        Logger::log("Info: PacketReceiver received DATA_PACKET " + std::to_string(header.packetCounter) +
+            " (size: " + std::to_string(totalPacketSize) + " bytes)");
+    }
+
+    // Only count data packets for total bytes and packets received
+    if (header.messageType == MessageType::DATA_PACKET) {
+        currentBytesReceived += totalPacketSize;
+        m_totalPacketsReceived++;
+    }
+
+    // A sequence error occurs if a data packet arrives with a number different from the one
+    // we expect. This implies that one or more packets were lost or significantly reordered
+    // in transit.
+    if (header.messageType == MessageType::DATA_PACKET) {
+        if (header.packetCounter != expectedPacketCounter) {
+            m_sequenceErrorCount++;
+            // When a sequence error occurs, we resync to the new counter.
+            expectedPacketCounter = header.packetCounter;
+        }
+        expectedPacketCounter++;
+    }
+}
+
+/**
  * @brief Initiates an asynchronous receive operation.
  * If the receiver is running, it requests the network interface to receive data.
  */
@@ -194,50 +240,16 @@ void PacketReceiver::processBuffer() {
             // Packet is valid. Extract the payload and invoke the callback.
             std::vector<char> payload_vec(payload, payload + header->payloadSize);
 
-            // This is a secondary, more rigorous check for data integrity. It rebuilds the expected
-            // payload from scratch and compares it byte-for-byte against the received payload.
-            // A mismatch here indicates a subtle data corruption that the simpler checksum failed to catch.
-            if (header->messageType == MessageType::DATA_PACKET) {
-                const std::string expected = buildExpectedPayload(header->packetCounter, header->payloadSize);
-                if (expected.size() == payload_vec.size() && !std::equal(payload_vec.begin(), payload_vec.end(), expected.begin())) {
-                    Logger::log("Warning: Payload content mismatch for packet " + std::to_string(header->packetCounter));
-                    m_contentMismatchCount++;
-                }
-            }
+            // Update statistics for the valid packet.
+            accountForPacket(*header, payload_vec);
 
+            // Dispatch the packet to the controller for state management.
             if (onPacketCallback) {
 #ifdef DEBUG_LOG
                 Logger::log("Debug: PacketReceiver::processBuffer - Dispatching packet. Message Type: " + std::to_string(static_cast<int>(header->messageType)) + ", Packet Counter: " + std::to_string(header->packetCounter)
                 + ", payloadSize: " + std::to_string(header->payloadSize));
 #endif
-                if(header->messageType == MessageType::DATA_PACKET){
-                    m_endTime = std::chrono::steady_clock::now(); 
-                }
                 onPacketCallback(*header, payload_vec);
-            }
-            if (header->messageType == MessageType::DATA_PACKET) {
-                Logger::log("Info: PacketReceiver received DATA_PACKET " + std::to_string(header->packetCounter) + 
-                            " (size: " + std::to_string(totalPacketSize) + " bytes)");
-            }
-
-            // Safely update stats under a lock.
-            std::lock_guard<std::mutex> lock(statsMutex);
-            // Only count data packets for total bytes and packets received
-            if (header->messageType == MessageType::DATA_PACKET) {
-                currentBytesReceived += totalPacketSize;
-                m_totalPacketsReceived++;
-            }
-
-            // A sequence error occurs if a data packet arrives with a number different from the one
-            // we expect. This implies that one or more packets were lost or significantly reordered
-            // in transit.
-            if (header->messageType == MessageType::DATA_PACKET) {
-                if (header->packetCounter != expectedPacketCounter) {
-                    m_sequenceErrorCount++;
-                    // When a sequence error occurs, we resync to the new counter.
-                    expectedPacketCounter = header->packetCounter;
-                }
-                expectedPacketCounter++;
             }
         } else {
             Logger::log("Error: Checksum validation failed. Discarding one byte to find the next packet.");

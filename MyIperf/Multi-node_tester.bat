@@ -23,7 +23,7 @@ rem   Multi-node_tester.bat 5 1500 10000 10
 rem ==============================================================================
 
 rem --- Configuration ---
-set "EXECUTABLE=.\build\Release\IPEFTC.exe"
+set "EXECUTABLE=.\Debug\Release\IPEFTC.exe"
 set "LOG_DIR=.\Log"
 set "SERVER_IP=0.0.0.0"
 set "CLIENT_TARGET_IP=127.0.0.1"
