@@ -14,11 +14,6 @@
 #include "Protocol.h"
 #include "Config.h"
 
-#ifdef _WIN32
-// Define HANDLE to be void* to avoid including <windows.h> in a header file.
-typedef void *HANDLE;
-#endif
-
 #include <cstdlib>  // std::abort
 #include <sstream>  // std::ostringstream
 
@@ -80,7 +75,7 @@ inline void assertLog(bool condition, const char* conditionStr, const char* file
  * @brief A thread-safe, asynchronous logging utility.
  *
  * This static class provides a simple logging framework that queues messages
- * from multiple threads and writes them to the console, a file, and a named pipe.
+ * from multiple threads and writes them to the console and optional log files.
  */
 class Logger {
 public:
@@ -146,7 +141,11 @@ private:
     static std::deque<std::string> messageQueue;
     /**< The logger worker thread. */
     static std::thread workerThread;
-    /**< Flag to control the running state of the logger. */
+    /**< Mutex guarding start/stop transitions. */
+    static std::mutex startStopMutex;
+    /**< Flag indicating the logger has been started. */
+    static std::atomic<bool> started;
+    /**< Flag to control the running state of the logger worker loop. */
     static std::atomic<bool> running;
 
     // File logging members
@@ -156,20 +155,6 @@ private:
     static std::atomic<bool> saveToFile;
     /**< The directory where log files are stored. */
     static const std::string logDirectory;
-
-#ifdef _WIN32
-    // Named pipe logging members
-    /**
-     * @brief The main function for the named pipe worker thread.
-     */
-    static void pipeWorker();
-    /**< The named pipe worker thread. */
-    static std::thread pipeThread;
-    /**< The handle to the named pipe. */
-    static HANDLE hPipe;
-    /**< Flag to indicate if a client is connected to the named pipe. */
-    static std::atomic<bool> pipeConnected;
-    /**< The name of the named pipe. */
-    static std::string pipeName;
-#endif
+    /**< Mutex protecting direct output when logger is not running. */
+    static std::mutex immediateMutex;
 };

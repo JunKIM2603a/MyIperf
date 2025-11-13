@@ -120,8 +120,10 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
             } else {
                 throw std::runtime_error("Invalid value for --save-logs. Must be 'true' or 'false'.");
             }
+        } else if (arg == "--handshake-timeout-ms" && i + 1 < argc) {
+            config.setHandshakeTimeoutMs(std::stoi(argv[++i]));
         } else if (arg.rfind("--", 0) == 0) {
-            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--help", "-h"};
+            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--help", "-h"};
             bool is_known = false;
             for(const auto& known : known_args) {
                 if (arg == known) {
@@ -169,6 +171,7 @@ void CLIHandler::printHelp() {
               << "  --num-packets <count>     Number of packets to send (0 for unlimited until interrupted).\n"
               << "  --interval-ms <ms>        Delay between sending packets in milliseconds (0 for continuous send).\n"
               << "  --save-logs <true|false>  Save console logs to a file in the 'Log' directory.\n"
+              << "  --handshake-timeout-ms <ms>  Timeout to wait for CONFIG_ACK before aborting (default 5000).\n"
               << "  -h, --help                Display this help message and exit.\n\n"
               << "UNDERSTANDING THE FINAL REPORT:\n"
               << "  The report is split into two main sections:\n"

@@ -13,7 +13,8 @@ Config::Config() :
     targetIP("127.0.0.1"), // Default IP: localhost
     port(5201),            // Default port: 5201
     mode(TestMode::CLIENT), // Default mode: Client
-    saveLogs(false)        // Default saveLogs: false
+    saveLogs(false),       // Default saveLogs: false
+    handshakeTimeoutMs(5000) // Default handshake timeout: 5000 ms
 {}
 
 /**
@@ -115,6 +116,17 @@ bool Config::getSaveLogs() const {
     return saveLogs;
 }
 
+void Config::setHandshakeTimeoutMs(int timeoutMs) {
+    if (timeoutMs <= 0) {
+        throw std::invalid_argument("Error: handshakeTimeoutMs must be > 0.");
+    }
+    handshakeTimeoutMs = timeoutMs;
+}
+
+int Config::getHandshakeTimeoutMs() const {
+    return handshakeTimeoutMs;
+}
+
 /**
  * @brief Converts the Config object to a JSON representation.
  * @return A nlohmann::json object.
@@ -130,6 +142,7 @@ nlohmann::json Config::toJson() const {
     root["port"] = port;
     root["mode"] = (mode == TestMode::CLIENT ? "CLIENT" : "SERVER");
     root["saveLogs"] = saveLogs;
+    root["handshakeTimeoutMs"] = handshakeTimeoutMs;
     return root;
 }
 
@@ -149,6 +162,7 @@ Config Config::fromJson(const nlohmann::json& json) {
     if (json.contains("targetIP")) config.setTargetIP(json["targetIP"].get<std::string>());
     if (json.contains("port")) config.setPort(json["port"].get<int>());
     if (json.contains("saveLogs")) config.setSaveLogs(json["saveLogs"].get<bool>());
+    if (json.contains("handshakeTimeoutMs")) config.setHandshakeTimeoutMs(json["handshakeTimeoutMs"].get<int>());
     if (json.contains("mode")) {
         std::string modeStr = json["mode"].get<std::string>();
         if (modeStr == "CLIENT") {

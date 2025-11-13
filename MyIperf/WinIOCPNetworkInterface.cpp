@@ -1,10 +1,12 @@
 ﻿#ifdef _WIN32
 #include "WinIOCPNetworkInterface.h"
 #include "Logger.h"
+#include "Protocol.h"
 #include <stdexcept>
 #include <chrono>
 #include <ws2tcpip.h> // For InetPton, InetNtop
 #include <string>
+#include <sstream>
 #include <Mswsock.h> // For CancelIoEx
 
 #pragma comment(lib, "Mswsock.lib")
@@ -434,7 +436,23 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
             case OperationType::Recv: {
 #ifdef DEBUG_LOG
                 Logger::log("Debug: Receive operation completed. Bytes transferred: " + std::to_string(bytesTransferred));
-#endif                
+#endif
+                if (bytesTransferred >= sizeof(PacketHeader)) {
+                    const PacketHeader* header = reinterpret_cast<const PacketHeader*>(ioData->buffer);
+                    if (header->messageType != MessageType::DATA_PACKET) {
+                        std::ostringstream handshakeLog;
+                        handshakeLog << "\x1b[95mHANDSHAKE: IOCP received message type "
+                                     << static_cast<int>(header->messageType)
+                                     << " (" << bytesTransferred << " bytes)\x1b[0m";
+                        Logger::log(handshakeLog.str());
+                    }
+                } else if (bytesTransferred > 0) {
+                    std::ostringstream handshakeLog;
+                    handshakeLog << "\x1b[95mHANDSHAKE: IOCP received partial header ("
+                                 << bytesTransferred << " bytes)\x1b[0m";
+                    Logger::log(handshakeLog.str());
+                }
+
                 std::vector<char> receivedData(ioData->buffer, ioData->buffer + bytesTransferred);
                 ioData->recvCallback(receivedData, bytesTransferred);
                 delete ioData;

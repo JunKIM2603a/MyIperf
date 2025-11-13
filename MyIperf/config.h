@@ -141,6 +141,18 @@ public:
      */
     static Config fromJson(const nlohmann::json& json);
 
+    /**
+     * @brief Sets the timeout in milliseconds for waiting on CONFIG_ACK.
+     * @param timeoutMs Timeout duration in milliseconds.
+     */
+    void setHandshakeTimeoutMs(int timeoutMs);
+
+    /**
+     * @brief Gets the timeout in milliseconds for waiting on CONFIG_ACK.
+     * @return Timeout duration in milliseconds.
+     */
+    int getHandshakeTimeoutMs() const;
+
 private:
     /**< The size of each data packet in bytes. */
     int packetSize;
@@ -158,4 +170,6 @@ private:
     TestMode mode;
     /**< Whether to save logs to a file. */
     bool saveLogs;
+    /**< Timeout for waiting on CONFIG_ACK during client handshake. */
+    int handshakeTimeoutMs;
 };

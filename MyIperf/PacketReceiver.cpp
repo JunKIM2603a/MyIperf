@@ -211,6 +211,12 @@ void PacketReceiver::processBuffer() {
                 Logger::log("Debug: PacketReceiver::processBuffer - Dispatching packet. Message Type: " + std::to_string(static_cast<int>(header->messageType)) + ", Packet Counter: " + std::to_string(header->packetCounter)
                 + ", payloadSize: " + std::to_string(header->payloadSize));
 #endif
+                if (header->messageType != MessageType::DATA_PACKET) {
+                    Logger::log("\x1b[95mHANDSHAKE: PacketReceiver forwarding message type "
+                                + std::to_string(static_cast<int>(header->messageType))
+                                + " (#" + std::to_string(header->packetCounter) + ", "
+                                + std::to_string(totalPacketSize) + " bytes)\x1b[0m");
+                }
                 if(header->messageType == MessageType::DATA_PACKET){
                     m_endTime = std::chrono::steady_clock::now(); 
                 }
@@ -242,6 +248,11 @@ void PacketReceiver::processBuffer() {
             }
         } else {
             Logger::log("Error: Checksum validation failed. Discarding one byte to find the next packet.");
+            if (header->messageType != MessageType::DATA_PACKET) {
+                Logger::log("\x1b[91mHANDSHAKE: Checksum failure for message type "
+                            + std::to_string(static_cast<int>(header->messageType))
+                            + " (expected size " + std::to_string(totalPacketSize) + ")\x1b[0m");
+            }
             m_receiveBuffer.erase(m_receiveBuffer.begin());
             m_failedChecksumCount++;
             continue;

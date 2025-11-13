@@ -130,7 +130,13 @@ private:
     /** @brief Flag to ensure stopTest() logic is executed only once. */
     std::atomic<bool> m_stopped;
 
-    
+    // --- Handshake Watchdog ---
+    std::thread m_handshakeWatchdog;
+    std::atomic<bool> m_handshakeWatchdogArmed{false};
+    std::mutex m_handshakeWatchdogMutex;
+    std::condition_variable m_handshakeWatchdogCv;
+    bool m_handshakeWatchdogCancel{false};
+
 
     /**
      * @brief Resets the controller to a clean state for a new test.
@@ -156,6 +162,10 @@ private:
      * It sends a final statistics packet to the server and then waits for a corresponding
      * acknowledgment from the server to ensure the stats were received.
      */
+    void startHandshakeWatchdog();
+
+    void cancelHandshakeWatchdog();
+
     void sendClientStatsAndAwaitAck();
 
     /**

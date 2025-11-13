@@ -11,7 +11,7 @@
     "targetIP": "127.0.0.1",
 
     "_comment_port": "The port number for the connection. Must match the server.",
-    "port": 5201,
+    "port": 60000,
 
     "_comment_packetSize": "The size of each data packet in bytes.",
     "packetSize": 8192,
@@ -33,5 +33,8 @@
     "protocol": "TCP",
 
     "_comment_saveLogs": "Whether to save console output to a log file in the 'Log' directory.",
-    "saveLogs": true
+    "saveLogs": true,
+
+    "_comment_handshakeTimeoutMs": "Timeout in milliseconds to wait for CONFIG_ACK before aborting the handshake.",
+    "handshakeTimeoutMs": 5000
 }

@@ -105,12 +105,14 @@ TestController::TestController() {
  */
 TestController::~TestController() {
     stopTest();
+    cancelHandshakeWatchdog();
 }
 
 /**
  * @brief Resets all member variables to their initial state for a new test.
  */
 void TestController::reset() {
+    cancelHandshakeWatchdog();
     currentState = State::IDLE;
     m_stopped = false;
     m_expectedDataPacketCounter = 0;
@@ -194,6 +196,7 @@ void TestController::startTest(const Config& config) {
  */
 void TestController::stopTest() {
     Logger::log("Debug: TestController::stopTest() called.");
+    cancelHandshakeWatchdog();
     if (m_stopped.exchange(true)) {
         Logger::log("Debug: TestController::stopTest() already stopped, returning.");
         return; // Already stopped
@@ -309,6 +312,8 @@ void TestController::transitionTo_nolock(State newState) {
         case State::WAITING_FOR_ACK: {
             Logger::log("Info: Client waiting for server acknowledgment.");
             DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
+            Logger::log("\x1b[95mHANDSHAKE: Client entered WAITING_FOR_ACK\x1b[0m");
+            startHandshakeWatchdog();
             break;
         }
         case State::WAITING_FOR_CONFIG: {
@@ -501,6 +506,7 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         networkInterface->asyncSend(ackPacket, [this](size_t bytesSent) {
                             if (bytesSent > 0) {
                                 Logger::log("Info: Server sent config ACK.");
+                                Logger::log("\x1b[95mHANDSHAKE: Client CONFIG_ACK dispatched\x1b[0m");
                                 transitionTo_nolock(State::RUNNING_TEST);
                             } else {
                                 Logger::log("Error: Server failed to send config ACK.");
@@ -642,6 +648,8 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                 DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
                 if (currentState == State::WAITING_FOR_ACK) {
                     Logger::log("Info: Client received server ACK. Starting test.");
+                    Logger::log("\x1b[92mHANDSHAKE: Client processed CONFIG_ACK\x1b[0m");
+                    cancelHandshakeWatchdog();
                     transitionTo_nolock(State::RUNNING_TEST);
                 }
                 break;
@@ -815,6 +823,63 @@ void TestController::sendClientStatsAndAwaitAck() {
             transitionTo(State::ERRORED);
         }
     });
+}
+
+void TestController::startHandshakeWatchdog() {
+    if (currentConfig.getMode() != Config::TestMode::CLIENT) {
+        return;
+    }
+
+    cancelHandshakeWatchdog();
+
+    const int timeoutMs = currentConfig.getHandshakeTimeoutMs();
+    {
+        std::lock_guard<std::mutex> lock(m_handshakeWatchdogMutex);
+        m_handshakeWatchdogCancel = false;
+    }
+
+    m_handshakeWatchdogArmed = true;
+    Logger::log("\x1b[95mHANDSHAKE: Watchdog armed for " + std::to_string(timeoutMs) + " ms\x1b[0m");
+
+    m_handshakeWatchdog = std::thread([this, timeoutMs]() {
+        std::unique_lock<std::mutex> lock(m_handshakeWatchdogMutex);
+        bool cancelled = m_handshakeWatchdogCv.wait_for(
+            lock,
+            std::chrono::milliseconds(timeoutMs),
+            [this]() { return m_handshakeWatchdogCancel; });
+        lock.unlock();
+
+        if (cancelled) {
+            m_handshakeWatchdogArmed = false;
+            return;
+        }
+
+        m_handshakeWatchdogArmed = false;
+        Logger::log("\x1b[91mHANDSHAKE: Timed out waiting for CONFIG_ACK after "
+                    + std::to_string(timeoutMs) + " ms\x1b[0m");
+        transitionTo(State::ERRORED);
+    });
+}
+
+void TestController::cancelHandshakeWatchdog() {
+    if (m_handshakeWatchdog.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(m_handshakeWatchdogMutex);
+            m_handshakeWatchdogCancel = true;
+        }
+        m_handshakeWatchdogCv.notify_all();
+        if (std::this_thread::get_id() == m_handshakeWatchdog.get_id()) {
+            m_handshakeWatchdog.detach();
+        } else {
+            m_handshakeWatchdog.join();
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_handshakeWatchdogMutex);
+        m_handshakeWatchdogCancel = false;
+    }
+    m_handshakeWatchdogArmed = false;
 }
 
 void TestController::cancelTimer() {

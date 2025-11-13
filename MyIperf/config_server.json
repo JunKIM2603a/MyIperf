@@ -14,5 +14,8 @@
     "port": 5201,
 
     "_comment_saveLogs": "Whether to save console output to a log file in the 'Log' directory.",
-    "saveLogs": true
+    "saveLogs": true,
+
+    "_comment_handshakeTimeoutMs": "Timeout in milliseconds to wait for CONFIG_ACK before aborting the handshake.",
+    "handshakeTimeoutMs": 5000
 }
