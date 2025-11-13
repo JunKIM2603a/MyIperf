@@ -410,8 +410,18 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
         }
 
         if (!success || (bytesTransferred == 0 && ioData->operationType != OperationType::Accept && ioData->operationType != OperationType::Connect)) {
-            DWORD errorCode = GetLastError();
-            Logger::log("Warning: I/O operation failed or connection closed. Error: " + std::to_string(errorCode) + " - " + getErrorMessage(errorCode));
+            // Graceful shutdown is not an error. It's indicated by a successful receive operation of 0 bytes.
+            if (success && bytesTransferred == 0 && ioData->operationType == OperationType::Recv) {
+                Logger::log("Info: Connection gracefully closed by peer.");
+            } else {
+                DWORD errorCode = GetLastError();
+                // ERROR_OPERATION_ABORTED (995) is expected when we call CancelIoEx during shutdown.
+                // Don't log it as a warning.
+                if (errorCode != ERROR_OPERATION_ABORTED) {
+                    Logger::log("Warning: I/O operation failed or connection closed. Error: " + std::to_string(errorCode) + " - " + getErrorMessage(errorCode));
+                }
+            }
+
             if (ioData->operationType == OperationType::Recv) ioData->recvCallback({}, 0);
             else if (ioData->operationType == OperationType::Send) ioData->sendCallback(0);
             else if (ioData->operationType == OperationType::Accept) ioData->acceptCallback(false, "", 0);

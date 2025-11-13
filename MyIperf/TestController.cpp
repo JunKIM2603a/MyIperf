@@ -621,7 +621,7 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
                         if (bytesSent > 0) {
                             Logger::log("Info: Server sent final STATS_ACK with its generator stats.");
-                            transitionTo_nolock(State::WAITING_FOR_SHUTDOWN_ACK);
+                            transitionTo_nolock(State::FINISHED);
                         } else {
                             Logger::log("Error: Server failed to send final STATS_ACK.");
                             transitionTo_nolock(State::ERRORED);

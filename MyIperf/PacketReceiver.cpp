@@ -38,7 +38,7 @@ void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback o
     expectedPacketCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
     // packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
-    packetBufferSize = 1000000000; // buffer size 1GiB
+    packetBufferSize = 13000000;
 
     Logger::log("Info: PacketReceiver started.");
     // Start the first asynchronous receive operation.
@@ -161,7 +161,8 @@ void PacketReceiver::processBuffer() {
 
         // Sanity check on the payload size to prevent errors from corrupted data.
         if (header->payloadSize > packetBufferSize * 2) { 
-            Logger::log("Error: Invalid payload size in header. Clearing buffer to resynchronize.");
+            Logger::log("Error: Invalid payload size in header. Clearing buffer to resynchronize." 
+                + std::to_string(header->payloadSize) + " bytes exceeds maximum allowed." + std::to_string(packetBufferSize * 2));
             m_receiveBuffer.clear();
             break;
         }
