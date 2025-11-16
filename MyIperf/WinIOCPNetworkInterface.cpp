@@ -440,11 +440,13 @@ void WinIOCPNetworkInterface::iocpWorkerThread() {
                 if (bytesTransferred >= sizeof(PacketHeader)) {
                     const PacketHeader* header = reinterpret_cast<const PacketHeader*>(ioData->buffer);
                     if (header->messageType != MessageType::DATA_PACKET) {
+#ifdef DEBUG_LOG
                         std::ostringstream handshakeLog;
                         handshakeLog << "\x1b[95mHANDSHAKE: IOCP received message type "
                                      << static_cast<int>(header->messageType)
                                      << " (" << bytesTransferred << " bytes)\x1b[0m";
                         Logger::log(handshakeLog.str());
+#endif
                     }
                 } else if (bytesTransferred > 0) {
                     std::ostringstream handshakeLog;

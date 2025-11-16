@@ -24,8 +24,11 @@ I/O 작업이 완료되면 워커 스레드는 해당 `OperationType`을 검색�
 -   **STATS_EXCHANGE**: 테스트 후 성능 통계를 교환하기 위해 보내는 메시지.
 -   **STATS_ACK**: 통계 메시지 수신 확인.
 -   **CLIENT_READY**: 클라이언트가 테스트의 두 번째 단계(서버-클라이언트)를 시작할 준비가 되었음을 서버에 알리는 신호.
+-   **SHUTDOWN_ACK**: 클라이언트가 최종 통계를 받은 후 서버에 보내는 종료 확인 메시지 (Graceful shutdown).
 
 `MessageType`은 각 패킷의 헤더에 포함되어 수신 측이 패킷의 목적을 이해하고 적절한 비즈니스 로직을 실행할 수 있도록 합니다.
+
+**중요**: 모든 메시지는 상태 전이 **후**에 전송되어 race condition을 방지합니다.
 
 ## 3. State
 
@@ -45,10 +48,13 @@ I/O 작업이 완료되면 워커 스레드는 해당 `OperationType`을 검색�
 -   **WAITING_FOR_SERVER_FIN**: 클라이언트가 서버의 데이터 전송이 끝나기를 기다리는 중.
 -   **SERVER_TEST_FINISHING**: S->C 데이터 전송이 끝났고 서버가 최종 핸드셰이크를 시작하는 중.
 -   **EXCHANGING_SERVER_STATS**: S->C 테스트에 대한 최종 통계가 교환되는 중.
+-   **WAITING_FOR_SHUTDOWN_ACK**: 서버가 최종 통계를 보낸 후 클라이언트의 종료 확인을 기다리는 중.
 -   **FINISHED**: 테스트가 성공적으로 완료됨.
 -   **ERRORED**: 복구할 수 없는 오류가 발생함.
 
 `TestController`는 현재 `State`를 기반으로 다음 작업을 결정하고 수신된 패킷의 `MessageType`에 따라 새 상태로 전환합니다.
+
+**설계 원칙**: 모든 `asyncSend` 호출 **전에** 상태 전이를 수행하여 빠른 네트워크 환경에서도 응답을 올바른 상태에서 처리할 수 있도록 보장합니다.
 
 ## 4. 관계 다이어그램
 
@@ -111,9 +117,27 @@ sequenceDiagram
 
     C->>S: (OperationType: Send) -> (MessageType: STATS_EXCHANGE)
     Note over S: `STATS_EXCHANGE` 수신
+    Note over S: 상태 전이 먼저: SERVER_TEST_FINISHING -> WAITING_FOR_SHUTDOWN_ACK
     S->>C: (OperationType: Send) -> (MessageType: STATS_ACK)
-    Note over S: 상태: SERVER_TEST_FINISHING -> FINISHED
-    Note over C: `STATS_ACK` 수신, 상태: EXCHANGING_SERVER_STATS -> FINISHED
+    
+    Note over C: `STATS_ACK` 수신
+    C->>S: (OperationType: Send) -> (MessageType: SHUTDOWN_ACK)
+    Note over C: 상태: EXCHANGING_SERVER_STATS -> FINISHED
+    Note over S: `SHUTDOWN_ACK` 수신, 상태: WAITING_FOR_SHUTDOWN_ACK -> FINISHED
 ```
 
-요약하면, `OperationType`은 네트워크 작업 자체를 나타내고, `MessageType`은 송수신되는 데이터의 의미를 나타내며, `State`는 테스트 흐름에서 애플리케이션의 현재 논리적 위치를 나타냅니다. 이 세 가지 요소가 함께 작동하여 전체 시스템의 동작을 정의합니다.
+## 5. 요약
+
+`OperationType`, `MessageType`, `State`는 다음과 같이 협력합니다:
+
+- **OperationType**: 네트워크 계층의 비동기 I/O 작업 유형 (Recv, Send, Accept, Connect)
+- **MessageType**: 애플리케이션 계층의 메시지 의미 (CONFIG, DATA, STATS, SHUTDOWN 등)
+- **State**: 테스트 흐름에서 컨트롤러의 현재 논리적 상태
+
+### 핵심 설계 원칙
+
+1. **상태 전이 타이밍**: 모든 상태 전이는 `asyncSend` **전에** 수행
+2. **Graceful Shutdown**: `SHUTDOWN_ACK`를 통한 양측 안전 종료
+3. **스레드 안전성**: `transitionTo_nolock` 사용으로 데드락 방지
+
+이 세 가지 요소가 유기적으로 작동하여 안정적이고 예측 가능한 네트워크 성능 테스트 시스템을 구축합니다.

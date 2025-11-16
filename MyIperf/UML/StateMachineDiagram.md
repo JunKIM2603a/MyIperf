@@ -2,6 +2,25 @@
 
 이 문서는 애플리케이션 생명주기 관리의 핵심인 `TestController`의 상태 머신을 상세히 설명합니다.
 
+## 핵심 설계 원칙
+
+### 1. 상태 전이 타이밍 (Race Condition 방지)
+모든 `asyncSend` 호출 **전에** 상태 전이를 수행합니다:
+```cpp
+// 올바른 패턴
+transitionTo_nolock(NewState);  // 상태 전이 먼저
+networkInterface->asyncSend(packet, callback);  // 메시지 전송 후
+```
+
+**이유**: 네트워크가 빠른 경우 응답이 `asyncSend` 콜백 실행 **전에** 도착할 수 있습니다. 상태를 먼저 전이하면 응답을 올바른 상태에서 처리할 수 있습니다.
+
+### 2. Graceful Shutdown
+Phase 2 완료 후 클라이언트가 `SHUTDOWN_ACK`를 전송하여 서버가 안전하게 종료할 수 있도록 보장합니다.
+
+### 3. 스레드 안전성
+- `transitionTo()`: Mutex를 획득하여 스레드 안전 보장
+- `transitionTo_nolock()`: 이미 mutex를 보유한 컨텍스트에서 사용 (데드락 방지)
+
 ## 1. 상태 머신 다이어그램 (Mermaid)
 
 이 다이어그램은 `TestController`가 네트워크 이벤트(예: 패킷 수신)나 내부 트리거(예: 타이머 만료)에 응답하여 여러 상태 간에 어떻게 전환되는지를 보여줍니다.
@@ -38,21 +57,25 @@ stateDiagram-v2
     %% 2단계: S -> C
     state '2단계:S->C' {
         WAITING_FOR_CLIENT_READY --> RUNNING_SERVER_TEST: CLIENT_READY 수신 (서버)
-        WAITING_FOR_SERVER_FIN --> RUNNING_SERVER_TEST: 수신 시작
         RUNNING_SERVER_TEST --> SERVER_TEST_FINISHING: 테스트 시간 종료 (서버)
         RUNNING_SERVER_TEST --> EXCHANGING_SERVER_STATS: TEST_FIN 수신 (클라이언트)
     }
 
     %% 2.5단계: 최종 통계
     state '2.5단계:최종통계' {
-        SERVER_TEST_FINISHING --> EXCHANGING_SERVER_STATS: 서버가 클라이언트 통계 대기
-        EXCHANGING_SERVER_STATS --> FINISHED: STATS_ACK 수신 (클라이언트)
-        SERVER_TEST_FINISHING --> FINISHED: STATS_ACK 전송 (서버)
+        SERVER_TEST_FINISHING --> WAITING_FOR_SHUTDOWN_ACK: STATS_ACK 전송 (서버, 상태 전이 먼저)
+        WAITING_FOR_SHUTDOWN_ACK --> FINISHED: SHUTDOWN_ACK 수신 (서버)
+        EXCHANGING_SERVER_STATS --> FINISHED: SHUTDOWN_ACK 전송 (클라이언트)
     }
 
     %% 종료
     FINISHED --> [*]
     ERRORED --> [*]
+
+    note right of WAITING_FOR_SHUTDOWN_ACK
+        새로운 상태: Graceful shutdown을 위해
+        클라이언트의 최종 확인을 대기
+    end note
 ```
 
 ## 2. 상태 설명
@@ -85,7 +108,11 @@ stateDiagram-v2
         *   **서버**: `CLIENT_READY`를 수신하면 설정된 시간 동안 데이터 패킷을 보내기 시작합니다. 타이머가 만료되면 `SERVER_TEST_FINISHING`으로 전환됩니다.
         *   **클라이언트**: 서버로부터 데이터 패킷을 수신합니다.
 
-*   **2.5단계: S->C 최종 통계 교환**
+*   **2.5단계: S->C 최종 통계 교환 및 Graceful Shutdown**
     *   `SERVER_TEST_FINISHING`: 서버가 `TEST_FIN` 메시지를 보내고, 클라이언트가 두 번째 단계의 통계를 보내기를 기다립니다.
     *   `EXCHANGING_SERVER_STATS` (클라이언트): 최종 `TEST_FIN`을 수신하면, 클라이언트는 2단계 통계를 보내고 최종 `STATS_ACK`를 기다립니다.
-    *   최종 확인 후, 양측은 `FINISHED` 상태로 전환됩니다.
+    *   `WAITING_FOR_SHUTDOWN_ACK` (서버): **상태 전이를 먼저** 수행한 후 `STATS_ACK`를 전송하고, 클라이언트의 최종 `SHUTDOWN_ACK`를 기다립니다.
+    *   클라이언트는 서버 통계를 받은 후 `SHUTDOWN_ACK`를 전송하고 `FINISHED`로 전환됩니다.
+    *   서버는 `SHUTDOWN_ACK`를 수신하면 `FINISHED`로 전환됩니다.
+    
+    **중요**: 모든 메시지 전송 전에 상태 전이를 먼저 수행하여 race condition을 방지합니다.

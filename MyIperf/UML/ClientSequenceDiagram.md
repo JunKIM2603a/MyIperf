@@ -2,6 +2,18 @@
 
 이 문서는 `MyIperf` 클라이언트의 내부 구성 요소 간의 상호 작용 순서를 시작부터 테스트 완료까지 보여줍니다.
 
+## 핵심 설계 원칙
+
+### 상태 전이 타이밍
+모든 `asyncSend` 호출 **전에** 상태 전이를 수행하여 race condition을 방지합니다:
+- ✅ `transitionTo_nolock(NewState)` → `asyncSend(packet)`
+- ❌ `asyncSend(packet)` → 콜백에서 `transitionTo(NewState)`
+
+### PacketGenerator 스레드 관리
+- 각 `start()` 호출 시 이전 스레드를 완전히 정리 (`joinable()` 체크 및 `join()`)
+- `running` 플래그를 강제 리셋하여 재시작 보장
+- 스레드 생성 성공 시 명시적 로깅
+
 ## 1. 다이어그램
 
 ```mermaid
@@ -12,52 +24,55 @@ sequenceDiagram
     participant Receiver as PacketReceiver
     participant Network as NetworkInterface
     participant Server as 원격 서버
+    participant Logger as Logger
 
     User->>Controller: startTest(config)
     note right of User: 1. 테스트 시작
+    Controller->>Logger: log("Info: Client test starting")
 
-    Controller->>Network: initialize() & asyncConnect()
+    Controller->>Network: initialize(ip, port)
+    Controller->>Network: asyncConnect(ip, port, ConnectCallback)
     Network-->>Server: [TCP 3-Way Handshake]
-    Server-->>Network: 
-    Network-->>Controller: onConnected() 콜백
-    Controller->>Receiver: start()
+    Server-->>Network: [TCP Handshake ACK]
+    Network-->>Controller: ConnectCallback(true) // onConnected()
+    Controller->>Receiver: start(PacketCallback)
     note over Controller: 상태: CONNECTING -> SENDING_CONFIG
 
-    Controller->>Network: asyncSend(CONFIG_HANDSHAKE)
+    Controller->>Network: asyncSend(CONFIG_HANDSHAKE, SendCallback)
     note right of Controller: 2. 설정 교환
     Server-->>Network: CONFIG_ACK 수신
-    Network-->>Controller: onPacket(CONFIG_ACK) 콜백
+    Network-->>Controller: RecvCallback(CONFIG_ACK) // onPacket(CONFIG_ACK)
     note over Controller: 상태: WAITING_FOR_ACK -> RUNNING_TEST
 
-    Controller->>Generator: start()
+    Controller->>Generator: start(config, CompletionCallback)
     note right of Controller: 3. C->S 데이터 전송 시작
 
     loop 설정된 시간 동안
-        Generator->>Network: asyncSend(DATA_PACKET)
+        Generator->>Network: asyncSend(DATA_PACKET, SendCallback)
     end
 
-    Generator-->>Controller: onTestCompleted() 콜백
+    Generator-->>Controller: CompletionCallback() // onTestCompleted()
     note over Controller: 상태: RUNNING_TEST -> FINISHING
-    Controller->>Network: asyncSend(TEST_FIN)
+    Controller->>Network: asyncSend(TEST_FIN, SendCallback)
     note right of Controller: 4. C->S 테스트 종료
 
     Server-->>Network: TEST_FIN 수신
-    Network-->>Controller: onPacket(TEST_FIN) 콜백
+    Network-->>Controller: RecvCallback(TEST_FIN) // onPacket(TEST_FIN)
     note over Controller: 상태: FINISHING -> EXCHANGING_STATS
 
-    Controller->>Network: asyncSend(STATS_EXCHANGE)
+    Controller->>Network: asyncSend(STATS_EXCHANGE, SendCallback)
     note right of Controller: 5. C->S 통계 교환
     Server-->>Network: STATS_ACK (서버 통계 포함) 수신
-    Network-->>Controller: onPacket(STATS_ACK) 콜백
+    Network-->>Controller: RecvCallback(STATS_ACK) // onPacket(STATS_ACK)
     note over Controller: 상태: EXCHANGING_STATS -> WAITING_FOR_SERVER_FIN
 
-    Controller->>Network: asyncSend(CLIENT_READY)
+    Controller->>Network: asyncSend(CLIENT_READY, SendCallback)
     note right of Controller: 6. S->C 테스트 준비 신호
     Controller->>Receiver: resetStats()
 
     loop 서버가 TEST_FIN을 보낼 때까지
         Server-->>Network: DATA_PACKET 수신
-        Network-->>Receiver: onPacket(DATA_PACKET) 콜백
+        Network-->>Receiver: RecvCallback(DATA_PACKET) // onPacket(DATA_PACKET)
         activate Receiver
         Receiver->>Receiver: 패킷 처리 및 통계 업데이트
         deactivate Receiver
@@ -65,19 +80,21 @@ sequenceDiagram
     note right of Receiver: 7. S->C 데이터 수신
 
     Server-->>Network: TEST_FIN 수신
-    Network-->>Controller: onPacket(TEST_FIN) 콜백
+    Network-->>Controller: RecvCallback(TEST_FIN) // onPacket(TEST_FIN)
     note over Controller: 상태: WAITING_FOR_SERVER_FIN -> EXCHANGING_SERVER_STATS
-    Controller->>Network: asyncSend(STATS_EXCHANGE)
+    Controller->>Network: asyncSend(STATS_EXCHANGE, SendCallback)
     note right of Controller: 8. S->C 통계 교환
 
     Server-->>Network: STATS_ACK (서버 통계 포함) 수신
-    Network-->>Controller: onPacket(STATS_ACK) 콜백
+    Network-->>Controller: RecvCallback(STATS_ACK) // onPacket(STATS_ACK)
     note over Controller: 상태: EXCHANGING_SERVER_STATS -> FINISHED
 
     Controller-->>User: 테스트 완료 (CLI 스레드 차단 해제)
     note right of User: 9. 모든 단계 완료
+    Controller->>Logger: writeFinalReport(config, clientStats, serverStats)
     User->>Controller: stopTest() (리소스 정리)
     Controller->>Network: close()
+    Controller->>Logger: log("Info: Client test finished")
 ```
 
 ## 2. 순서 설명

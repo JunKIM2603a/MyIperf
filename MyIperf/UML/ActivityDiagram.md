@@ -125,8 +125,9 @@ graph TD
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> CONNECTING: startTest(client)
-    IDLE --> ACCEPTING: startTest(server)
+    IDLE --> INITIALIZING: startTest(client/server)
+    INITIALIZING --> CONNECTING: Client init complete
+    INITIALIZING --> ACCEPTING: Server init complete
 
     CONNECTING --> SENDING_CONFIG: Connection complete
     SENDING_CONFIG --> WAITING_FOR_ACK: Config sent
@@ -147,9 +148,10 @@ stateDiagram-v2
     RUNNING_SERVER_TEST --> SERVER_TEST_FINISHING: Test duration ended (Server)
     
     WAITING_FOR_SERVER_FIN --> EXCHANGING_SERVER_STATS: TEST_FIN received (Client)
-    SERVER_TEST_FINISHING --> FINISHED: STATS_ACK sent (Server)
+    SERVER_TEST_FINISHING --> WAITING_FOR_SHUTDOWN_ACK: STATS_ACK sent (Server)
 
     EXCHANGING_SERVER_STATS --> FINISHED: STATS_ACK received (Client)
+    WAITING_FOR_SHUTDOWN_ACK --> FINISHED: Shutdown ACK received (Server)
 
     ERRORED --> [*]
     FINISHED --> [*]

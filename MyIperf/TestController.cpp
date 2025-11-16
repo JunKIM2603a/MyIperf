@@ -298,13 +298,17 @@ void TestController::transitionTo_nolock(State newState) {
             std::memcpy(packet.data(), &header, sizeof(PacketHeader));
             std::memcpy(packet.data() + sizeof(PacketHeader), configData.data(), configData.size());
 
+            // Critical fix: Transition state BEFORE sending to prevent race condition
+            // where server's CONFIG_ACK arrives before asyncSend callback executes
+            transitionTo_nolock(State::WAITING_FOR_ACK);
+
             networkInterface->asyncSend(packet, [this](size_t bytesSent) {
                 if (bytesSent > 0) {
                     Logger::log("Info: Client sent config packet successfully (" + std::to_string(bytesSent) + " bytes).");
-                    transitionTo(State::WAITING_FOR_ACK);
+                    // State transition already completed above
                 } else {
                     Logger::log("Error: Client failed to send config packet.");
-                    transitionTo(State::ERRORED);
+                    transitionTo_nolock(State::ERRORED);
                 }
             });
             break;
@@ -503,11 +507,15 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         std::vector<char> ackPacket(sizeof(PacketHeader));
                         memcpy(ackPacket.data(), &ackHeader, sizeof(PacketHeader));
 
+                        // Critical fix: Transition state BEFORE sending to prevent race condition
+                        // where client's DATA_PACKET arrives before server is ready
+                        transitionTo_nolock(State::RUNNING_TEST);
+
                         networkInterface->asyncSend(ackPacket, [this](size_t bytesSent) {
                             if (bytesSent > 0) {
                                 Logger::log("Info: Server sent config ACK.");
                                 Logger::log("\x1b[95mHANDSHAKE: Client CONFIG_ACK dispatched\x1b[0m");
-                                transitionTo_nolock(State::RUNNING_TEST);
+                                // State transition already completed above
                             } else {
                                 Logger::log("Error: Server failed to send config ACK.");
                                 transitionTo_nolock(State::ERRORED);
@@ -624,10 +632,14 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
                     }
 
+                    // Critical fix: Transition state BEFORE asyncSend to prevent race condition
+                    // This matches the pattern used in Phase 1 and ensures consistent behavior
+                    transitionTo_nolock(State::WAITING_FOR_SHUTDOWN_ACK);
+
                     networkInterface->asyncSend(packet, [this](size_t bytesSent) {
                         if (bytesSent > 0) {
                             Logger::log("Info: Server sent final STATS_ACK with its generator stats.");
-                            transitionTo_nolock(State::FINISHED);
+                            // State transition already completed above
                         } else {
                             Logger::log("Error: Server failed to send final STATS_ACK.");
                             transitionTo_nolock(State::ERRORED);
@@ -679,11 +691,15 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
                     }
 
-                    networkInterface->asyncSend(packet, [this, payload_str](size_t bytesSent) {
+                    // Critical fix: Transition state BEFORE sending to prevent race condition
+                    // where server's STATS_ACK arrives before asyncSend callback executes
+                    transitionTo_nolock(State::EXCHANGING_SERVER_STATS);
+                    Logger::log("Info: Client Stats (Phase 2): " + payload_str);
+
+                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
                         if (bytesSent > 0) {
                             Logger::log("Info: Client sent STATS_EXCHANGE for server-to-client test.");
-                            Logger::log("Info: Client Stats (Phase 2): " + payload_str);
-                            transitionTo_nolock(State::EXCHANGING_SERVER_STATS);
+                            // State transition already completed above
                         } else {
                             Logger::log("Error: Client failed to send STATS_EXCHANGE for server-to-client test.");
                             transitionTo_nolock(State::ERRORED);
@@ -715,10 +731,14 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                     std::vector<char> readyPacket(sizeof(PacketHeader));
                     memcpy(readyPacket.data(), &readyHeader, sizeof(PacketHeader));
 
+                    // Critical fix: Transition state BEFORE sending to prevent race condition
+                    // where server's TEST_FIN arrives before client is ready to receive it
+                    transitionTo_nolock(State::WAITING_FOR_SERVER_FIN);
+
                     networkInterface->asyncSend(readyPacket, [this](size_t bytesSent) {
                         if (bytesSent > 0) {
                             Logger::log("Info: Client sent CLIENT_READY.");
-                            transitionTo_nolock(State::WAITING_FOR_SERVER_FIN);
+                            // State transition already completed above
                         } else {
                             Logger::log("Error: Client failed to send CLIENT_READY.");
                             transitionTo_nolock(State::ERRORED);
@@ -755,6 +775,10 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
                         // In either case, the client's job is done.
                         transitionTo_nolock(State::FINISHED);
                     });
+                } else {
+                    // Unexpected STATS_ACK in wrong state - helps diagnose race conditions
+                    Logger::log("Warning: Client received STATS_ACK in unexpected state: " 
+                                + std::string(stateToString(currentState)));
                 }
                 break;
             case MessageType::DATA_PACKET:

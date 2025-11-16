@@ -9,48 +9,92 @@ classDiagram
     direction LR
 
     class CLIHandler {
+        -TestController& testController
+        +CLIHandler(controller)
         +run(argc, argv) void
+        +static printHelp() void
         -parseArgs(argc, argv) Config
-        -printHelp() void
     }
 
     class ConfigParser {
+        -string filepath
+        -Config configData
+        +ConfigParser(filepath)
         +load() bool
         +getConfig() Config
     }
 
     class Config {
         <<Data>>
-        +TestMode mode
-        +string targetIP
-        +int port
-        +int packetSize
-        +int numPackets
-        +int sendIntervalMs
-        +bool saveLogs
+        +enum TestMode { CLIENT, SERVER }
+        -int packetSize
+        -int numPackets
+        -int sendIntervalMs
+        -string protocol
+        -string targetIP
+        -int port
+        -TestMode mode
+        -bool saveLogs
+        -int handshakeTimeoutMs
+        +Config()
         +toJson() json
-        +fromJson(json) Config
+        +static fromJson(json) Config
     }
 
     class TestController {
-        -State currentState
+        <<Singleton>>
+        -atomic~State~ currentState
         -unique_ptr~NetworkInterface~ networkInterface
         -unique_ptr~PacketGenerator~ packetGenerator
         -unique_ptr~PacketReceiver~ packetReceiver
+        -Config currentConfig
+        -promise~void~ testCompletionPromise
+        -atomic~bool~ testCompletionPromise_set
+        -uint32_t m_expectedDataPacketCounter
+        -atomic~long long~ m_contentMismatchCount
+        -time_point m_testStartTime
+        -TestStats m_remoteStats
+        -TestStats m_clientStatsPhase1
+        -TestStats m_serverStatsPhase1
+        -TestStats m_clientStatsPhase2
+        -TestStats m_serverStatsPhase2
+        -mutex m_cliBlockMutex
+        -condition_variable m_cliBlockCv
+        -atomic~bool~ m_cliBlockFlag
+        -atomic~bool~ m_stopped
+        -thread m_handshakeWatchdog
+        -atomic~bool~ m_handshakeWatchdogArmed
+        -mutex m_handshakeWatchdogMutex
+        -condition_variable m_handshakeWatchdogCv
+        -bool m_handshakeWatchdogCancel
+        +TestController()
+        +~TestController()
         +startTest(config) void
         +stopTest() void
-        -transitionTo(State) void
+        +getTestCompletionFuture() future~void~
+        +parseStats(payload) json
+        -reset() void
         -onPacket(header, payload) void
+        -onTestCompleted() void
+        -startHandshakeWatchdog() void
+        -cancelHandshakeWatchdog() void
+        -sendClientStatsAndAwaitAck() void
+        -transitionTo(State) void
+        -transitionTo_nolock(State) void
+        -cancelTimer() void
     }
 
     class NetworkInterface {
         <<Abstract>>
-        +initialize(ip, port) bool
-        +close() void
-        +asyncConnect(ip, port, cb) void
-        +asyncAccept(cb) void
-        +asyncSend(data, cb) void
-        +asyncReceive(size, cb) void
+        +virtual ~NetworkInterface()
+        +virtual initialize(ip, port) bool
+        +virtual close() void
+        +virtual asyncConnect(ip, port, cb) void
+        +virtual asyncAccept(cb) void
+        +virtual asyncSend(data, cb) void
+        +virtual asyncReceive(size, cb) void
+        +virtual blockingSend(data) int
+        +virtual blockingReceive(size) vector~char~
     }
 
     class WinIOCPNetworkInterface {
@@ -70,61 +114,104 @@ classDiagram
     class PacketGenerator {
         -NetworkInterface* networkInterface
         -atomic~bool~ running
+        -atomic~long long~ totalBytesSent
+        -atomic~long long~ totalPacketsSent
+        -Config config
+        -uint32_t packetCounter
+        -CompletionCallback completionCallback
+        -thread m_generatorThread
+        -mutex m_mutex
+        -condition_variable m_cv
+        -time_point m_startTime
+        -time_point m_endTime
+        -TestStats m_LastStats
+        +PacketGenerator(netInterface)
+        +~PacketGenerator()
         +start(config, onComplete) void
         +stop() void
+        +resetStats() void
         +getStats() TestStats
+        +lastStats() TestStats
+        +saveLastStats(Stats) void
         -sendNextPacket() void
+        -generatorThreadLoop() void
+        -onPacketSent(bytesSent) void
+        -shouldContinueSending() bool
+        -preparePacketTemplate() void
     }
 
     class PacketReceiver {
         -NetworkInterface* networkInterface
         -atomic~bool~ running
+        -time_point m_startTime
+        -time_point m_endTime
+        -atomic~long long~ currentBytesReceived
+        -mutable mutex statsMutex
+        -int packetBufferSize
+        -vector~char~ m_receiveBuffer
+        -PacketCallback onPacketCallback
+        -ReceiverCompletionCallback onCompleteCallback
+        -uint32_t expectedPacketCounter
+        -atomic~long long~ m_totalPacketsReceived
+        -atomic~long long~ m_failedChecksumCount
+        -atomic~long long~ m_sequenceErrorCount
+        -atomic~long long~ m_contentMismatchCount
+        +PacketReceiver(netInterface)
+        +~PacketReceiver()
+        +start(onPacket) void
         +start(onPacket, onComplete) void
         +stop() void
         +getStats() TestStats
+        +resetStats() void
+        -receiveNextPacket() void
+        -onPacketReceived(data, bytesReceived) void
         -processBuffer() void
     }
 
     class Logger {
         <<Static>>
-        +start(config) void
-        +stop() void
-        +log(message) void
-        +writeFinalReport(...) void
+        +static start() void
+        +static stop() void
+        +static log(message) void
+        +static writeFinalReport(config, clientStats, serverStats) void
     }
 
     class Protocol {
         <<Helper>>
-        +PacketHeader
-        +MessageType
-        +TestStats
-        +calculateChecksum(data, size) uint32_t
-        +verifyPacket(header, payload) bool
+        +struct PacketHeader
+        +enum MessageType
+        +struct TestStats
+        +static calculateChecksum(data, size) uint32_t
+        +static verifyPacket(header, payload) bool
     }
 
     CLIHandler ..> ConfigParser : Uses
-    ConfigParser ..> Config : Creates
-    CLIHandler o-- TestController : Controls
+    CLIHandler ..> TestController : Controls
+    ConfigParser o-- Config : Owns
     main ..> CLIHandler : Creates and runs
     main ..> Logger : Manages
+    main ..> TestController : Manages
 
     TestController *-- "1" NetworkInterface : Owns
     TestController *-- "1" PacketGenerator : Owns
     TestController *-- "1" PacketReceiver : Owns
-    TestController o-- Config : Uses
+    TestController ..> Config : Uses
     TestController ..> Logger : Uses
-
     TestController ..> Protocol : Uses
+    TestController ..> nlohmann.json : Uses
+
+    PacketGenerator ..> NetworkInterface : Uses
     PacketGenerator ..> Protocol : Uses
+    PacketGenerator ..> Config : Uses
+
+    PacketReceiver ..> NetworkInterface : Uses
     PacketReceiver ..> Protocol : Uses
+    PacketReceiver ..> Config : Uses
 
     NetworkInterface <|-- WinIOCPNetworkInterface : Implements
     NetworkInterface <|-- LinuxAsyncNetworkInterface : Implements
 
-    PacketGenerator --|> NetworkInterface : Uses
-    PacketReceiver --|> NetworkInterface : Uses
-    PacketGenerator ..> "TestStats" Protocol : Returns
-    PacketReceiver ..> "TestStats" Protocol : Returns
+    Config ..> nlohmann.json : Uses
 ```
 
 ## 2. 주요 클래스 설명

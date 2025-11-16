@@ -25,9 +25,19 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     Logger::log("Info: Client test parameters - packetSize=" + std::to_string(config.getPacketSize()) +
                ", numPackets=" + std::to_string(config.getNumPackets()) +
                ", intervalMs=" + std::to_string(config.getSendIntervalMs()));
+    
+    // Core modification: Ensure previous thread is fully cleaned up before starting a new one
+    if (m_generatorThread.joinable()) {
+        Logger::log("Warning: Previous generator thread still joinable. Joining before restart.");
+        running = false;
+        m_cv.notify_one();
+        m_generatorThread.join();
+    }
+    
+    // Check running flag state and force reset if necessary
     if (running) {
-        Logger::log("Info: PacketGenerator is already running.");
-        return;
+        Logger::log("Warning: Generator was already running. Force resetting.");
+        running = false;
     }
     
     this->config = config;
@@ -41,9 +51,10 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
     memset(&m_LastStats, 0, sizeof(TestStats));
 
     Logger::log("Info: PacketGenerator started.");
-    // Start the dedicated generator thread
+    
+    // Launch the generator thread
     m_generatorThread = std::thread(&PacketGenerator::generatorThreadLoop, this);
-    Logger::log("Debug: PacketGenerator::start exited.");
+    Logger::log("Debug: PacketGenerator::start exited. Thread created successfully.");
 }
 
 /**
@@ -51,12 +62,22 @@ void PacketGenerator::start(const Config& config, CompletionCallback onComplete)
  */
 void PacketGenerator::stop() {
     Logger::log("Debug: PacketGenerator::stop entered.");
-    running.store(false);
+    
+    bool wasRunning = running.exchange(false);
+    if (!wasRunning) {
+        Logger::log("Debug: PacketGenerator was already stopped.");
+    }
 
     m_cv.notify_one(); // Wake up the generator thread if it's sleeping
+    
     if (m_generatorThread.joinable()) {
+        Logger::log("Debug: Joining generator thread...");
         m_generatorThread.join();
+        Logger::log("Debug: Generator thread joined successfully.");
+    } else {
+        Logger::log("Debug: Generator thread was not joinable (already joined or never started).");
     }
+    
     m_endTime = std::chrono::steady_clock::now();
     Logger::log("Info: PacketGenerator stopped.");
     Logger::log("Debug: PacketGenerator::stop exited.");
