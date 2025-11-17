@@ -169,110 +169,59 @@ TestResult ParseTestSummary(const std::string& output, const std::string& role, 
         return result;
     }
 
-    // Locate the FINAL TEST SUMMARY region first to limit parsing scope
-    const std::string finalSummaryMarker = "FINAL TEST SUMMARY";
-    size_t summaryPos = output.find(finalSummaryMarker);
+    std::regex summaryRegex;
+    if (role == "Server") {
+        summaryRegex = std::regex(
+            "--- Phase 1: Client to Server ---[\\s\\S]*?Server Received:"
+            "[\\s\\S]*?Total Bytes Received:\\s*(\\d+)"
+            "[\\s\\S]*?Total Packets Received:\\s*(\\d+)"
+            "[\\s\\S]*?Duration:\\s*([\\d\\.]+)\\s*s"
+            "[\\s\\S]*?Throughput:\\s*([\\d\\.]+)\\s*Mbps"
+            "[\\s\\S]*?Sequence Errors:\\s*(\\d+)"
+            "[\\s\\S]*?Failed Checksums:\\s*(\\d+)"
+            "[\\s\\S]*?Content Mismatches:\\s*(\\d+)"
+        );
+    } else { // Client
+        summaryRegex = std::regex(
+            "--- Phase 2: Server to Client ---[\\s\\S]*?Client Received:"
+            "[\\s\\S]*?Total Bytes Received:\\s*(\\d+)"
+            "[\\s\\S]*?Total Packets Received:\\s*(\\d+)"
+            "[\\s\\S]*?Duration:\\s*([\\d\\.]+)\\s*s"
+            "[\\s\\S]*?Throughput:\\s*([\\d\\.]+)\\s*Mbps"
+            "[\\s\\S]*?Sequence Errors:\\s*(\\d+)"
+            "[\\s\\S]*?Failed Checksums:\\s*(\\d+)"
+            "[\\s\\S]*?Content Mismatches:\\s*(\\d+)"
+        );
+    }
 
-    if (summaryPos == std::string::npos) {
-        // Provide more context about what was searched for
-        if (output.find("[TestRunner] Server timed out in TestRunner") != std::string::npos) {
-            result.failureReason = "Server timed out in TestRunner and was forcefully terminated before FINAL TEST SUMMARY was printed.";
-        } else if (output.find("[TestRunner] Server process timed out and was forcefully terminated.") != std::string::npos) {
-            // Backwards compatibility with previous timeout message
-            result.failureReason = "Server process timed out in TestRunner before FINAL TEST SUMMARY was printed.";
-        } else if (output.find(finalSummaryMarker) != std::string::npos) {
-            // Extremely rare, but keep original diagnostic just in case
-            result.failureReason = "Found FINAL TEST SUMMARY marker but failed to match expected phase pattern. Output may have different format.";
+    std::smatch matches;
+    if (std::regex_search(output, matches, summaryRegex) && matches.size() == 8) {
+        try {
+            result.totalBytes = std::stoll(matches[1].str());
+            result.totalPackets = std::stoll(matches[2].str());
+            result.duration = std::stod(matches[3].str());
+            result.throughput = std::stod(matches[4].str());
+            result.sequenceErrors = std::stoll(matches[5].str());
+            result.checksumErrors = std::stoll(matches[6].str());
+            result.contentMismatches = std::stoll(matches[7].str());
+            result.success = true;
+        } catch (const std::exception& e) {
+            result.success = false;
+            result.failureReason = "Parse error while converting statistics: " + std::string(e.what());
+            std::cerr << "Parse error for port " << port << " (" << role << "): " << e.what() << std::endl;
+        }
+    } else {
+        result.success = false;
+        if (output.find("FINAL TEST SUMMARY") == std::string::npos) {
+            if (output.find("[TestRunner] Server timed out") != std::string::npos) {
+                 result.failureReason = "Server process timed out in TestRunner before FINAL TEST SUMMARY was printed.";
+            } else {
+                 result.failureReason = "Failed to find FINAL TEST SUMMARY in output. Process may have exited before completion.";
+            }
         } else {
-            result.failureReason = "Failed to find FINAL TEST SUMMARY in output. Process may have exited before completion.";
+             result.failureReason = "Failed to match test summary regex for role " + role + ". Output format may have changed or be incomplete.";
         }
-        result.success = false;
-        return result;
-    }
-
-    std::string summaryRegion = output.substr(summaryPos);
-
-    // Decide which block we are interested in based on role
-    const bool isClient = (role == "Client");
-    const std::string phaseHeader = isClient ? "--- Phase 2: Server to Client ---"
-                                             : "--- Phase 1: Client to Server ---";
-    const std::string receivedHeader = isClient ? "Client Received:" : "Server Received:";
-
-    size_t phasePos = summaryRegion.find(phaseHeader);
-    if (phasePos == std::string::npos) {
-        result.success = false;
-        result.failureReason = "Found FINAL TEST SUMMARY but not the expected phase header for role " + role + ".";
-        return result;
-    }
-
-    std::string phaseRegion = summaryRegion.substr(phasePos);
-    size_t recvPos = phaseRegion.find(receivedHeader);
-    if (recvPos == std::string::npos) {
-        result.success = false;
-        result.failureReason = "Found FINAL TEST SUMMARY but '" + receivedHeader + "' block was not found for role " + role + ".";
-        return result;
-    }
-
-    std::string blockRegion = phaseRegion.substr(recvPos);
-    // Stop at the next phase header if present to avoid accidentally crossing into another phase
-    size_t nextPhasePos = blockRegion.find("\n--- Phase ");
-    if (nextPhasePos != std::string::npos) {
-        blockRegion = blockRegion.substr(0, nextPhasePos);
-    }
-
-    // Now, within the blockRegion, extract individual statistics using simpler, per-field regexes.
-    auto extractSingleMatch = [&blockRegion](const std::regex& re, const std::string& fieldName, std::string& out, std::string& errorMsg) {
-        std::smatch m;
-        if (std::regex_search(blockRegion, m, re) && m.size() > 1) {
-            out = m[1].str();
-            return true;
-        }
-        if (!errorMsg.empty()) errorMsg += "; ";
-        errorMsg += "Missing or malformed '" + fieldName + "' entry";
-        return false;
-    };
-
-    std::string bytesStr, packetsStr, durationStr, throughputStr;
-    std::string seqErrStr, checksumErrStr, mismatchStr;
-    std::string errorMsg;
-
-    std::regex bytesRegex("Total Bytes Received:\\s*([0-9]+)");
-    std::regex packetsRegex("Total Packets Received:\\s*([0-9]+)");
-    std::regex durationRegex("Duration:\\s*([0-9]*\\.?[0-9]+)\\s*s");
-    std::regex throughputRegex("Throughput:\\s*([0-9]*\\.?[0-9]+)\\s*Mbps");
-    std::regex seqErrRegex("Sequence Errors:\\s*([0-9]+)");
-    std::regex checksumRegex("Failed Checksums:\\s*([0-9]+)");
-    std::regex mismatchRegex("Content Mismatches:\\s*([0-9]+)");
-
-    bool ok = true;
-    ok &= extractSingleMatch(bytesRegex, "Total Bytes Received", bytesStr, errorMsg);
-    ok &= extractSingleMatch(packetsRegex, "Total Packets Received", packetsStr, errorMsg);
-    ok &= extractSingleMatch(durationRegex, "Duration", durationStr, errorMsg);
-    ok &= extractSingleMatch(throughputRegex, "Throughput", throughputStr, errorMsg);
-    ok &= extractSingleMatch(seqErrRegex, "Sequence Errors", seqErrStr, errorMsg);
-    ok &= extractSingleMatch(checksumRegex, "Failed Checksums", checksumErrStr, errorMsg);
-    ok &= extractSingleMatch(mismatchRegex, "Content Mismatches", mismatchStr, errorMsg);
-
-    if (!ok) {
-        result.success = false;
-        result.failureReason = "Found summary block but " + errorMsg + ". Output may be incomplete or format has changed.";
         std::cerr << "Parse warning for port " << port << " (" << role << "): " << result.failureReason << std::endl;
-        return result;
-    }
-
-    try {
-        result.totalBytes = std::stoll(bytesStr);
-        result.totalPackets = std::stoll(packetsStr);
-        result.duration = std::stod(durationStr);
-        result.throughput = std::stod(throughputStr);
-        result.sequenceErrors = std::stoll(seqErrStr);
-        result.checksumErrors = std::stoll(checksumErrStr);
-        result.contentMismatches = std::stoll(mismatchStr);
-        result.success = true;
-    } catch (const std::exception& e) {
-        result.success = false;
-        result.failureReason = "Parse error while converting statistics: " + std::string(e.what());
-        std::cerr << "Parse error for port " << port << " (" << role << "): " << e.what() << std::endl;
     }
 
     return result;
@@ -359,8 +308,8 @@ void PrintResults(std::vector<TestResult>& results, long long expectedPackets, l
 
 
 int main(int argc, char* argv[]) {
-    if (argc != 5) {
-        std::cerr << "Usage: " << argv[0] << " <repetitions> <packet_size> <num_packets> <interval_ms>" << std::endl;
+    if (argc != 6) {
+        std::cerr << "Usage: " << argv[0] << " <repetitions> <packet_size> <num_packets> <interval_ms> <--save-logs>" << std::endl;
         return 1;
     }
 
@@ -368,6 +317,7 @@ int main(int argc, char* argv[]) {
     long long packetSize = std::stoll(argv[2]);
     long long numPackets = std::stoll(argv[3]);
     int intervalMs = std::stoi(argv[4]);
+    std::string saveLogs = argv[5];
 
     if (numPackets == 0) {
         std::cerr << "Error: TestRunner does not support numPackets==0 (infinite mode)." << std::endl;
@@ -390,6 +340,11 @@ int main(int argc, char* argv[]) {
     std::vector<TestResult> total_run_results;
     for (int i = 1; i <= repetitions; ++i) {
         std::cout << "=================================================" << std::endl;
+        time_t now = time(0);
+        tm localTime;
+        localtime_s(&localTime, &now);
+        std::cout << localTime.tm_mon + 1 << "/" << localTime.tm_mday << "/" << localTime.tm_year + 1900 << " "
+                  << localTime.tm_hour << ":" << localTime.tm_min << ":" << localTime.tm_sec << std::endl;
         std::cout << "--- Starting Iteration " << i << " of " << repetitions << " ---" << std::endl;
         std::cout << "=================================================" << std::endl;
 
@@ -397,12 +352,12 @@ int main(int argc, char* argv[]) {
         std::vector<std::string> outputs(ports.size() * 2);
 
         for (size_t j = 0; j < ports.size(); ++j) {
-            threads.emplace_back([j, &ports, &outputs, packetSize, numPackets, intervalMs, &executable, &serverIp, &clientTargetIp]() {
+            threads.emplace_back([j, &ports, &outputs, packetSize, numPackets, intervalMs, &executable, &serverIp, &clientTargetIp, &saveLogs]() {
                 int port = ports[j];
                 
                 // 1. Launch Server
                 std::stringstream serverCmd;
-                serverCmd << executable << " --mode server --target " << serverIp << " --port " << port << " --save-logs true";
+                serverCmd << executable << " --mode server --target " << serverIp << " --port " << port << " --save-logs " << saveLogs;
                 
                 ProcessHandles serverHandles;
                 if (!LaunchProcess(serverCmd.str(), serverHandles)) {
@@ -455,7 +410,7 @@ int main(int argc, char* argv[]) {
                 std::stringstream clientCmd;
                 clientCmd << executable << " --mode client --target " << clientTargetIp << " --port " << port
                           << " --packet-size " << packetSize << " --num-packets " << numPackets
-                          << " --interval-ms " << intervalMs << " --save-logs true";
+                          << " --interval-ms " << intervalMs << " --save-logs " << saveLogs;
                 
                 std::string clientOutput = ExecuteProcessAndCaptureOutput(clientCmd.str());
                 outputs[ports.size() + j] = clientOutput;
