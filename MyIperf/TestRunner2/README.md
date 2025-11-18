@@ -10,6 +10,7 @@ TestRunner2는 TestRunner에 TCP 기반 원격 제어 기능을 추가한 분산
 - **자동 동기화**: 서버 준비 완료 후 클라이언트 자동 시작
 - **단일/멀티 포트 지원**: 하나 또는 여러 포트에서 동시 테스트 실행
 - **결과 자동 수집**: 서버와 클라이언트 결과를 자동으로 수집하고 검증
+- **반복 실행 지원**: 지정된 횟수만큼 테스트를 반복 실행하며, 각 실행 후 프로그램을 완전히 재시작하여 메모리 리소스 안정성 확보
 - **JSON 프로토콜**: 명확한 메시지 구조로 확장 가능
 
 ### 아키텍처
@@ -152,6 +153,21 @@ TestRunner2.exe --mode <server|client> [옵션]
 
 포트는 `--test-port`부터 순차적으로 할당됩니다 (예: 60000, 60001, 60002, 60003, 60004).
 
+### 클라이언트 모드 (반복 실행)
+
+지정된 횟수만큼 테스트를 반복 실행합니다. 각 실행이 완료되면 프로그램이 완전히 종료되고 새 프로세스로 재시작되어 메모리 리소스가 완전히 해제됩니다.
+
+**5번 반복 실행:**
+```bash
+.\TestRunner2.exe --mode client ^
+    --server 192.168.1.100 ^
+    --test-port 60000 ^
+    --num-packets 10000 ^
+    --total-runs 5
+```
+
+각 실행은 독립적으로 수행되며, 실행 횟수는 콘솔에 표시됩니다 (예: "Test Run 1 of 5", "Test Run 2 of 5" 등).
+
 ## 명령행 옵션
 
 ### 공통 옵션
@@ -177,6 +193,7 @@ TestRunner2.exe --mode <server|client> [옵션]
 | `--interval-ms` | 패킷 전송 간격 (ms) | 0 (최대 속도) |
 | `--save-logs` | 로그 저장 여부 (true/false) | true |
 | `--num-ports` | 동시 테스트 포트 수 (멀티 포트 모드) | 1 (단일) |
+| `--total-runs` | 전체 테스트 실행 횟수 (각 실행 후 프로그램 재시작) | 1 |
 
 ## 프로토콜 명세
 
@@ -328,6 +345,26 @@ TestRunner2는 JSON 기반 메시지 프로토콜을 사용합니다.
     --interval-ms 10
 ```
 
+### 시나리오 4: 반복 실행 안정성 테스트
+
+장기간 안정성 테스트를 위해 동일한 테스트를 여러 번 반복 실행합니다. 각 실행은 독립적으로 수행되며, 프로그램이 완전히 재시작되어 메모리 누수나 리소스 누적 문제를 확인할 수 있습니다.
+
+**원격 서버:**
+```bash
+.\TestRunner2.exe --mode server --control-port 9000
+```
+
+**로컬 클라이언트 (10번 반복 실행):**
+```bash
+.\TestRunner2.exe --mode client ^
+    --server 192.168.1.100 ^
+    --test-port 60000 ^
+    --num-packets 10000 ^
+    --total-runs 10
+```
+
+각 실행이 완료되면 프로그램이 자동으로 재시작되며, 모든 실행이 완료될 때까지 계속됩니다.
+
 ## 출력 형식
 
 ### 서버 출력
@@ -384,6 +421,59 @@ Failed: 0
 SUCCESS: All tests passed!
 ```
 
+### 클라이언트 출력 (반복 실행)
+
+반복 실행 모드에서는 각 실행마다 실행 횟수가 표시되고, 마지막 실행이 아닌 경우 재시작 메시지가 출력됩니다.
+
+```
+==================================================
+Test Run 1 of 5
+==================================================
+Starting Single Port Test
+Port: 60000
+Packet Size: 8192 bytes
+Num Packets: 10000
+Interval: 0 ms
+==================================================
+[ControlClient] Connecting to 192.168.1.100:9000...
+[ControlClient] Connected to server
+[ControlClient] Sending CONFIG_REQUEST for port 60000
+[ControlClient] Server ready on port 60000
+[ProcessManager] Launching IPEFTC client: ...
+[ControlClient] Waiting for IPEFTC client to complete...
+[ControlClient] Client test completed
+[ControlClient] Requesting results from server...
+[ControlClient] Received server results
+
+--- FINAL TEST SUMMARY ---
+Role    Port    Duration (s)   Throughput (Mbps)   Total Bytes Rx        Total Packets Rx      Status
+--------------------------------------------------------------------------------------------------------
+Server  60000   2.35           278.63              81920000              10000                 PASS
+Client  60000   2.36           277.42              81920000              10000                 PASS
+
+--- Summary ---
+Total Tests: 2
+Passed: 2
+Failed: 0
+
+SUCCESS: All tests passed!
+
+==================================================
+Run 1 completed. Restarting for run 2...
+Waiting for resources to be released...
+==================================================
+[TestRunner2] Started new process for run 2
+[TestRunner2] Exiting current process. Resources will be released.
+```
+
+마지막 실행이 완료되면:
+
+```
+==================================================
+All 5 runs completed.
+==================================================
+```
+
 ## 주의사항 및 제한사항
 
 ### 네트워크 설정
@@ -403,6 +493,8 @@ SUCCESS: All tests passed!
 2. **프로세스 정리**: 비정상 종료 시 IPEFTC 프로세스가 남아있을 수 있으므로 확인 필요
 
 3. **로그 파일**: `--save-logs true` 사용 시 Log 디렉토리에 로그가 누적됩니다
+
+4. **반복 실행**: `--total-runs` 옵션 사용 시 각 실행이 완료된 후 프로그램이 완전히 종료되고 새 프로세스로 재시작됩니다. 이는 메모리 리소스가 완전히 해제되도록 보장하여 장기간 안정성 테스트에 유용합니다. 각 실행 사이에는 약 1초의 대기 시간이 있어 리소스 해제를 보장합니다.
 
 ### 플랫폼
 
