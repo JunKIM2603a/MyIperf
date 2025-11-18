@@ -558,5 +558,41 @@ int main(int argc, char* argv[]) {
     std::cout << "All test iterations completed." << std::endl;
     std::cout << "=================================================" << std::endl;
 
+    // Show configuration & command
+    std::cout << std::endl;
+    std::cout << "=================================================" << std::endl;
+    std::cout << "--- TestRunner Final Configuration ---" << std::endl;
+    std::cout << "=================================================" << std::endl;
+    std::cout << "Command Line Arguments:" << std::endl;
+    std::cout << "  Repetitions: " << repetitions << std::endl;
+    std::cout << "  Packet Size: " << packetSize << " bytes" << std::endl;
+    std::cout << "  Num Packets: " << numPackets << std::endl;
+    std::cout << "  Interval: " << intervalMs << " ms" << std::endl;
+    std::cout << "  Save Logs: " << saveLogs << std::endl;
+    std::cout << std::endl;
+    std::cout << "Internal Configuration:" << std::endl;
+    std::cout << "  Executable: " << executable << std::endl;
+    std::cout << "  Server IP: " << serverIp << std::endl;
+    std::cout << "  Client Target IP: " << clientTargetIp << std::endl;
+    std::cout << "  Ports: ";
+    for (size_t i = 0; i < ports.size(); ++i) {
+        std::cout << ports[i];
+        if (i < ports.size() - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+    std::cout << std::endl;
+    std::cout << "Actual IPEFTC Commands Executed (per port):" << std::endl;
+    for (size_t i = 0; i < ports.size(); ++i) {
+        int port = ports[i];
+        std::cout << "  Port " << port << ":" << std::endl;
+        std::cout << "    Server: " << executable << " --mode server --target " << serverIp 
+                  << " --port " << port << " --save-logs " << saveLogs << std::endl;
+        std::cout << "    Client: " << executable << " --mode client --target " << clientTargetIp 
+                  << " --port " << port << " --packet-size " << packetSize 
+                  << " --num-packets " << numPackets << " --interval-ms " << intervalMs 
+                  << " --save-logs " << saveLogs << std::endl;
+    }
+    std::cout << "=================================================" << std::endl;
+
     return 0;
 }

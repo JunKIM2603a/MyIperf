@@ -5,6 +5,7 @@
 #include <random> // For potential future use with random data generation
 #include <cstring>
 #include <type_traits> // For std::underlying_type_t
+#include <thread> // For std::this_thread::yield()
 
 // #define DEBUG_MINIMAL_PACKET // Removed for granular logging
 
@@ -146,6 +147,10 @@ void PacketGenerator::generatorThreadLoop() {
             std::unique_lock<std::mutex> lock(m_mutex);
             // Wait for the specified interval, but allow stop() to wake us up early.
             m_cv.wait_for(lock, std::chrono::milliseconds(config.getSendIntervalMs()));
+        } else {
+            // Yield to prevent 100% CPU usage while maintaining maximum throughput
+            // This allows the OS to schedule other threads (e.g., network I/O completion)
+            std::this_thread::yield();
         }
 
         // After sleeping (or being woken up), check the running flag again before looping.

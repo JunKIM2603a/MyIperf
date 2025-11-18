@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
+#include <thread> // For std::this_thread::yield()
 
 /**
  * @brief Constructs the PacketReceiver.
@@ -151,6 +152,9 @@ void PacketReceiver::onPacketReceived(const std::vector<char>& data, size_t byte
  * and dispatches them via the callback.
  */
 void PacketReceiver::processBuffer() {
+    int consecutiveFailures = 0;
+    const int MAX_CONSECUTIVE_FAILURES = 100;
+    
     while (running && !m_receiveBuffer.empty()) {
         if (m_receiveBuffer.size() < sizeof(PacketHeader)) {
             break; // Not enough data for a header, wait for more.
@@ -186,12 +190,18 @@ void PacketReceiver::processBuffer() {
         if (header->startCode != PROTOCOL_START_CODE) {
             Logger::log("Error: Invalid start code detected. Discarding one byte to find the next packet.");
             m_receiveBuffer.erase(m_receiveBuffer.begin());
+            consecutiveFailures++;
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                std::this_thread::yield();
+                consecutiveFailures = 0;
+            }
             continue; // Retry with the rest of the buffer.
         }
 
         // The checksum is a simple validation to detect if the packet's payload was corrupted during
         // transit. If verifyPacket fails, it means the data has been altered.
         if (verifyPacket(*header, payload)) {
+            consecutiveFailures = 0; // Reset on success
             // Packet is valid. Extract the payload and invoke the callback.
             std::vector<char> payload_vec(payload, payload + header->payloadSize);
 
@@ -254,7 +264,12 @@ void PacketReceiver::processBuffer() {
                             + " (expected size " + std::to_string(totalPacketSize) + ")\x1b[0m");
             }
             m_receiveBuffer.erase(m_receiveBuffer.begin());
-            m_failedChecksumCount++;
+            m_failedChecksumCount++;  // 통계는 정상적으로 기록됨
+            consecutiveFailures++;
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                std::this_thread::yield();
+                consecutiveFailures = 0;
+            }
             continue;
         }
 
