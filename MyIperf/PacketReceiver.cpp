@@ -39,7 +39,8 @@ void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback o
     expectedPacketCounter = 0;
     m_startTime = std::chrono::steady_clock::now();
     // packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
-    packetBufferSize = 13000000;
+    // packetBufferSize = 13'000'000;
+    packetBufferSize = 1'000'000'000;
 
     Logger::log("Info: PacketReceiver started.");
     // Start the first asynchronous receive operation.
