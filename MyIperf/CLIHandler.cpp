@@ -122,6 +122,15 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
             }
         } else if (arg == "--handshake-timeout-ms" && i + 1 < argc) {
             config.setHandshakeTimeoutMs(std::stoi(argv[++i]));
+         } else if ((arg == "--quiet" || arg == "-q") && i + 1 < argc) {
+             std::string val = argv[++i];
+             if (val == "true") {
+                Logger::setConsoleOutput(false);
+            } else if (val == "false") {
+                Logger::setConsoleOutput(true);
+            } else {
+                throw std::runtime_error("Invalid value for --quiet. Must be 'true' or 'false'.");
+            }
         } else if (arg.rfind("--", 0) == 0) {
             const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--help", "-h"};
             bool is_known = false;

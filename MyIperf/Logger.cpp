@@ -27,6 +27,16 @@ std::ofstream Logger::logStream;
 std::atomic<bool> Logger::saveToFile(false);
 const std::string Logger::logDirectory = "Log";
 
+std::string Logger::pipeName;
+std::atomic<bool> Logger::pipeConnected(false);
+std::thread Logger::pipeThread;
+#ifdef _WIN32
+void* Logger::hPipe = INVALID_HANDLE_VALUE;
+#endif
+
+// 정적 멤버 변수 초기화 (기본값: true)
+bool Logger::consoleOutput = true;
+
 namespace {
 
 std::string buildTimestampedLine(const std::string& message) {
@@ -165,9 +175,14 @@ void Logger::start(const Config& config) {
                 }
             }
 
+            // Pipe initialization
+            pipeName = "\\\\.\\pipe\\myiperflog_" + mode + "_" + config.getTargetIP() + "_" + std::to_string(config.getPort());
+            pipeConnected.store(false, std::memory_order_release);
+
             running.store(true, std::memory_order_release);
             started.store(true, std::memory_order_release);
             workerThread = std::thread(logWorker);
+            pipeThread = std::thread(pipeWorker);
         }
     }
 
@@ -194,7 +209,8 @@ void Logger::start(const Config& config) {
                  << " --num-packets " << config.getNumPackets()
                  << " --interval-ms " << config.getSendIntervalMs()
                  << " --save-logs " << (config.getSaveLogs() ? "true" : "false")
-                 << " --handshake-timeout-ms " << config.getHandshakeTimeoutMs();
+                 << " --handshake-timeout-ms " << config.getHandshakeTimeoutMs()
+                 << " --quiet " << (isConsoleOutputEnabled() ? "true" : "false");
     log("Info: Options =>" + optionStream.str());
 }
 
@@ -219,6 +235,24 @@ void Logger::stop() {
         workerThread.join();
     }
     workerThread = std::thread();
+
+#ifdef _WIN32
+    // 파이프 핸들에 대한 모든 보류 중인 I/O 작업을 취소합니다.
+    // 이것은 ConnectNamedPipe() 호출이 즉시 반환되도록 합니다.
+    if (!CancelIoEx(hPipe, NULL)) {
+        Logger::log("Error: Failed to cancel named pipe I/O. Error: " + std::to_string(GetLastError()));
+    }
+    // Close pipe handle to unblock ConnectNamedPipe if it's waiting
+    if (hPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle((HANDLE)hPipe);
+        hPipe = INVALID_HANDLE_VALUE;
+    }
+#endif
+
+    if (pipeThread.joinable()) {
+        pipeThread.join();
+    }
+    pipeThread = std::thread();
 
     if (saveToFile.load(std::memory_order_acquire) && logStream.is_open()) {
         logStream.flush();
@@ -247,7 +281,9 @@ void Logger::log(const std::string& message) {
         std::lock_guard<std::mutex> lock(immediateMutex);
         const std::string formatted = buildTimestampedLine(message);
         const std::string colored = colorizeLine(message, formatted);
-        std::cout << colored << std::endl;
+        if (consoleOutput) {
+            std::cout << colored << std::endl;
+        }
         return;
     }
 
@@ -279,11 +315,23 @@ void Logger::logWorker() {
         for (const auto& msg : writeQueue) {
             const std::string formatted = buildTimestampedLine(msg);
             const std::string colored = colorizeLine(msg, formatted);
-            std::cout << colored << std::endl;
+            if (consoleOutput) {
+                std::cout << colored << std::endl;
+            }
 
             if (saveToFile.load(std::memory_order_acquire) && logStream.is_open()) {
                 logStream << formatted << std::endl;
                 logStream.flush();
+            }
+
+            if (pipeConnected.load(std::memory_order_acquire)) {
+#ifdef _WIN32
+                DWORD bytesWritten;
+                BOOL success = WriteFile((HANDLE)hPipe, formatted.c_str(), formatted.length(), &bytesWritten, NULL);
+                if (!success) {
+                    pipeConnected.store(false, std::memory_order_release);
+                }
+#endif
             }
         }
     }
@@ -328,6 +376,15 @@ void Logger::writeFinalReport(const std::string& role,
     log("================================");
 }
 
+
+void Logger::setConsoleOutput(bool enabled) {
+    consoleOutput = enabled;
+}
+
+bool Logger::isConsoleOutputEnabled() {
+    return consoleOutput;
+}
+
 /**
  * @brief Gets the current time as a formatted string.
  * @return The current time string in the format "[YYYY-MM-DD HH:MM:SS] ".
@@ -338,4 +395,54 @@ const std::string Logger::getTimeNow() {
     std::ostringstream oss;
     oss << "[" << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S") << "] ";
     return oss.str();
+}
+
+/**
+ * @brief The main function for the pipe connection worker thread.
+ */
+void Logger::pipeWorker() {
+#ifdef _WIN32
+    while (running.load(std::memory_order_acquire)) {
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            hPipe = CreateNamedPipeA(
+                pipeName.c_str(),
+                PIPE_ACCESS_OUTBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1,
+                1024 * 16,
+                1024 * 16,
+                0,
+                NULL
+            );
+
+            if (hPipe == INVALID_HANDLE_VALUE) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                continue;
+            }
+        }
+
+        BOOL connected = ConnectNamedPipe((HANDLE)hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+
+        if (connected) {
+            pipeConnected.store(true, std::memory_order_release);
+            
+            while (running.load(std::memory_order_acquire) && pipeConnected.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            if (!running.load(std::memory_order_acquire)) break;
+
+            DisconnectNamedPipe((HANDLE)hPipe);
+        } else {
+            CloseHandle((HANDLE)hPipe);
+            hPipe = INVALID_HANDLE_VALUE;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+
+    if (hPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle((HANDLE)hPipe);
+        hPipe = INVALID_HANDLE_VALUE;
+    }
+#endif
 }

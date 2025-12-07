@@ -114,11 +114,27 @@ public:
                                  const TestStats& localStats,
                                  const TestStats& remoteStats);
 
+    /**
+     * @brief Sets whether console output is enabled.
+     * @param enabled True to enable console output, false to disable.
+     */
+    static void setConsoleOutput(bool enabled);
+    /**
+     * @brief Checks if console output is enabled.
+     * @return True if console output is enabled, false otherwise.
+     */
+    static bool isConsoleOutputEnabled();
+
 private:
     /**
      * @brief The main function for the logger worker thread.
      */
     static void logWorker();
+
+    /**
+     * @brief The main function for the pipe connection worker thread.
+     */
+    static void pipeWorker();
 
     /**
      * @brief Manages log file rotation.
@@ -157,4 +173,14 @@ private:
     static const std::string logDirectory;
     /**< Mutex protecting direct output when logger is not running. */
     static std::mutex immediateMutex;
+
+    // Pipe logging members
+    static std::string pipeName;
+    static std::atomic<bool> pipeConnected;
+    static std::thread pipeThread;
+#ifdef _WIN32
+    static void* hPipe; 
+#endif
+
+    static bool consoleOutput;  // 콘솔 출력 활성화 플래그
 };

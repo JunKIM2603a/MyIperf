@@ -16,7 +16,7 @@
 int main(int argc, char* argv[]) {
     std::cerr << "DEBUG: Entering main()\n";
 
-
+    std::cout << "=============== START ==============\n"<< std::endl;
     // Iterate through all command-line arguments.
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];

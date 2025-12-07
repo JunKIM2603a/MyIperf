@@ -34,6 +34,7 @@ public:
      */
     static void printHelp();
 
+
 private:
     /**
      * @brief Parses the command-line arguments to create a configuration.
