@@ -111,5 +111,8 @@ ResultsRequestMessage DeserializeResultsRequest(const std::string& json);
 ResultsResponseMessage DeserializeResultsResponse(const std::string& json);
 ErrorMessage DeserializeError(const std::string& json);
 
+// Helper to analyze and validate test results
+void AnalyzeTestResult(TestResult& result, long long expectedPackets, long long expectedBytes);
+
 } // namespace TestRunner2
 

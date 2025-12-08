@@ -13,7 +13,6 @@
 #include <windows.h>
 
 #include "Message.h"
-#include "PipeReader.h"
 #include <string>
 #include <memory>
 
@@ -70,30 +69,6 @@ public:
     TestResult ParseTestSummary(const std::string& output, 
                                const std::string& role, 
                                int port);
-
-    // ===== Named Pipe-based methods =====
-    
-    // Launch IPEFTC server with Named Pipe logging
-    bool LaunchIPEFTCServerWithPipe(const std::string& executablePath,
-                                    const TestConfig& config,
-                                    ProcessHandles& handles,
-                                    std::shared_ptr<PipeReader>& pipeReader);
-
-    // Launch IPEFTC client with Named Pipe logging
-    bool LaunchIPEFTCClientWithPipe(const std::string& executablePath,
-                                    const std::string& targetIP,
-                                    const TestConfig& config,
-                                    ProcessHandles& handles,
-                                    std::shared_ptr<PipeReader>& pipeReader);
-
-    // Wait for server ready using pipe-based logs
-    bool WaitForServerReadyFromPipe(std::shared_ptr<PipeReader>& pipeReader,
-                                    ProcessHandles& handles,
-                                    int timeoutMs = 15000);
-
-    // Capture process output from Named Pipe
-    std::string CaptureProcessOutputFromPipe(ProcessHandles& handles,
-                                            std::shared_ptr<PipeReader>& pipeReader);
 
 private:
     // Launch a generic process with stdout/stderr capture

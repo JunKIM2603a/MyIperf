@@ -298,19 +298,20 @@ bool ControlServer::ProcessConfigRequest(Session& session, const std::string& me
                   << ", Size: " << session.config.packetSize
                   << ", SaveLogs: " << (session.config.saveLogs ? "true" : "false") << std::endl;
 
-        // Launch IPEFTC server with Named Pipe
+        // Launch IPEFTC server (standard output capture)
         session.state = SessionState::SERVER_STARTING;
-        if (!m_processManager.LaunchIPEFTCServerWithPipe(m_ipeftcPath, session.config, 
-                                                         session.ipeftcProcess, session.pipeReader)) {
-            std::cerr << "[ControlServer] Failed to launch IPEFTC server with pipe" << std::endl;
+        if (!m_processManager.LaunchIPEFTCServer(m_ipeftcPath, session.config, 
+                                                 session.ipeftcProcess)) {
+            std::cerr << "[ControlServer] Failed to launch IPEFTC server" << std::endl;
             ErrorMessage errMsg("Failed to launch IPEFTC server");
             SendMessage(session.clientSocket, SerializeError(errMsg));
             session.state = SessionState::ERROR_STATE;
             return false;
         }
 
-        // Wait for server to be ready (using pipe-based logs)
-        if (!m_processManager.WaitForServerReadyFromPipe(session.pipeReader, session.ipeftcProcess, 
+        // Wait for server to be ready (using stdout logs)
+        // Note: WaitForServerReady will fill session.processOutput with initial logs
+        if (!m_processManager.WaitForServerReady(session.ipeftcProcess, session.processOutput, 
                                                  Protocol::SERVER_START_TIMEOUT_MS)) {
             std::cerr << "[ControlServer] IPEFTC server failed to start" << std::endl;
             ErrorMessage errMsg("IPEFTC server failed to start");
@@ -379,9 +380,9 @@ bool ControlServer::ProcessResultsRequest(Session& session, const std::string& m
         const auto timeout = std::chrono::seconds(static_cast<long long>(timeoutSec));
         
         while (!finished && (std::chrono::steady_clock::now() - startTime < timeout)) {
-            // Get logs from pipe reader
-            std::string currentLogs = session.pipeReader->GetAccumulatedLogs();
-            session.processOutput = currentLogs;
+            // Get logs from stdout
+            std::string newLogs = m_processManager.ReadAvailableOutput(session.ipeftcProcess);
+            session.processOutput += newLogs;
             
             if (session.processOutput.find(completionMsg) != std::string::npos) {
                 finished = true;
@@ -396,8 +397,8 @@ bool ControlServer::ProcessResultsRequest(Session& session, const std::string& m
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         
-        // Capture final output from pipe
-        session.processOutput = m_processManager.CaptureProcessOutputFromPipe(session.ipeftcProcess, session.pipeReader);
+        // Capture final output from stdout
+        session.processOutput += m_processManager.CaptureProcessOutput(session.ipeftcProcess);
         
         if (!finished) {
             std::cerr << "[ControlServer] IPEFTC server timed out" << std::endl;
@@ -408,9 +409,18 @@ bool ControlServer::ProcessResultsRequest(Session& session, const std::string& m
     // Parse results
     session.result = m_processManager.ParseTestSummary(session.processOutput, "Server", session.config.port);
     session.state = SessionState::TEST_COMPLETE;
+    
+    // Analyze/Validate Server Result
+    long long expectedBytes = static_cast<long long>(session.config.packetSize) * session.config.numPackets;
+    AnalyzeTestResult(session.result, session.config.numPackets, expectedBytes);
+    
+    // Also analyze client result (just in case client didn't do it or we want to double check)
+    // Client result is in resultsReq.clientResult
+    if (resultsReq.clientResult.success) {
+         AnalyzeTestResult(resultsReq.clientResult, session.config.numPackets, expectedBytes);
+    }
 
     // Save both server and client results to accumulated results
-    long long expectedBytes = session.config.packetSize * session.config.numPackets;
     {
         std::lock_guard<std::mutex> lock(m_resultsMutex);
         session.result.expectedPackets = session.config.numPackets;
@@ -454,14 +464,6 @@ void ControlServer::PrintServerResult(const TestResult& result,
     std::cout << "--- SERVER SIDE TEST SUMMARY ---" << std::endl;
     std::cout << "==================================================" << std::endl;
     
-    // Validation
-    bool packetsMatch = (result.totalPackets == expectedPackets);
-    bool bytesMatch = (result.totalBytes == expectedBytes);
-    bool noErrors = (result.sequenceErrors == 0 && 
-                     result.checksumErrors == 0 && 
-                     result.contentMismatches == 0);
-    bool pass = result.success && packetsMatch && bytesMatch && noErrors;
-    
     // Print in table format similar to client
     std::cout << std::left << std::setw(8) << "Role"
               << std::setw(8) << "Port"
@@ -478,30 +480,15 @@ void ControlServer::PrintServerResult(const TestResult& result,
               << std::setw(18) << result.throughput
               << std::setw(22) << result.totalBytes
               << std::setw(24) << result.totalPackets
-              << std::setw(10) << (pass ? "PASS" : "FAIL") << std::endl;
+              << std::setw(10) << (result.success ? "PASS" : "FAIL") << std::endl;
     
-    if (!pass) {
-        std::cout << "  -> Expected: " << expectedPackets << " packets (" 
-                  << expectedBytes << " bytes)";
-        if (!noErrors) {
-            std::cout << ", Errors detected";
-        }
-        std::cout << std::endl;
+    if (!result.success && !result.failureReason.empty()) {
+        std::cout << "  -> " << result.failureReason << std::endl;
     }
     
     // Print detailed summary
     std::cout << "\n--- Summary ---" << std::endl;
-    std::cout << "Test Result: " << (pass ? "PASS" : "FAIL") << std::endl;
-    
-    if (!noErrors) {
-        std::cout << "Sequence Errors: " << result.sequenceErrors << std::endl;
-        std::cout << "Checksum Errors: " << result.checksumErrors << std::endl;
-        std::cout << "Content Mismatches: " << result.contentMismatches << std::endl;
-    }
-    
-    if (!result.failureReason.empty()) {
-        std::cout << "Failure Reason: " << result.failureReason << std::endl;
-    }
+    std::cout << "Test Result: " << (result.success ? "PASS" : "FAIL") << std::endl;
     
     std::cout << "==================================================" << std::endl;
 }
@@ -530,31 +517,19 @@ void ControlServer::PrintAccumulatedResults() {
     int passedTests = 0;
 
     for (const auto& result : m_allResults) {
-        bool packetsMatch = (result.totalPackets == result.expectedPackets);
-        bool bytesMatch = (result.totalBytes == result.expectedBytes);
-        bool noErrors = (result.sequenceErrors == 0 && 
-                         result.checksumErrors == 0 && 
-                         result.contentMismatches == 0);
-        bool pass = result.success && packetsMatch && bytesMatch && noErrors;
-
         std::cout << std::left << std::setw(8) << result.role
                   << std::setw(8) << result.port
                   << std::setw(15) << std::fixed << std::setprecision(2) << result.duration
                   << std::setw(18) << result.throughput
                   << std::setw(22) << result.totalBytes
                   << std::setw(24) << result.totalPackets
-                  << std::setw(10) << (pass ? "PASS" : "FAIL") << std::endl;
+                  << std::setw(10) << (result.success ? "PASS" : "FAIL") << std::endl;
 
-        if (!pass) {
-            std::cout << "  -> Expected: " << result.expectedPackets << " packets (" 
-                      << result.expectedBytes << " bytes)";
-            if (!noErrors) {
-                std::cout << ", Errors detected";
-            }
-            std::cout << std::endl;
+        if (!result.success && !result.failureReason.empty()) {
+            std::cout << "  -> " << result.failureReason << std::endl;
         }
 
-        if (pass) passedTests++;
+        if (result.success) passedTests++;
         totalTests++;
     }
 

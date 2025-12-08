@@ -14,6 +14,10 @@ ControlClient::ControlClient(const std::string& serverIP,
       m_controlPort(controlPort),
       m_ipeftcPath(ipeftcPath),
       m_wsaInitialized(false) {
+    if (m_serverIP == "0.0.0.0") {
+        std::cout << "[ControlClient] Auto-correcting server IP 0.0.0.0 to 127.0.0.1" << std::endl;
+        m_serverIP = "127.0.0.1";
+    }
 }
 
 ControlClient::~ControlClient() {
@@ -181,29 +185,32 @@ PortTestResult ControlClient::ExecutePortTest(const TestConfig& config) {
         ServerReadyMessage readyMsg = DeserializeServerReady(responseMsg);
         std::cout << "[ControlClient] Server ready on port " << readyMsg.port << std::endl;
 
-        // Launch IPEFTC client with Named Pipe
+        // Launch IPEFTC client (standard output capture)
         ProcessHandles clientProcess;
-        std::shared_ptr<PipeReader> pipeReader;
-        if (!m_processManager.LaunchIPEFTCClientWithPipe(m_ipeftcPath, m_serverIP, config, 
-                                                         clientProcess, pipeReader)) {
-            result.errorMessage = "Failed to launch IPEFTC client with pipe";
+        if (!m_processManager.LaunchIPEFTCClient(m_ipeftcPath, m_serverIP, config, 
+                                                 clientProcess)) {
+            result.errorMessage = "Failed to launch IPEFTC client";
             Disconnect(controlSocket);
             return result;
         }
 
-        // Wait for IPEFTC client to complete and capture output from pipe
+        // Wait for IPEFTC client to complete and capture output
         std::cout << "[ControlClient] Waiting for IPEFTC client to complete..." << std::endl;
-        std::string clientOutput = m_processManager.CaptureProcessOutputFromPipe(clientProcess, pipeReader);
+        std::string clientOutput = m_processManager.CaptureProcessOutput(clientProcess);
         m_processManager.CloseHandles(clientProcess);
 
         // Parse client results
         result.clientResult = m_processManager.ParseTestSummary(clientOutput, "Client", config.port);
         std::cout << "[ControlClient] Client test completed" << std::endl;
+        
+        // Analyze/Validate Client Result
+        long long expectedBytes = static_cast<long long>(config.packetSize) * config.numPackets;
+        AnalyzeTestResult(result.clientResult, config.numPackets, expectedBytes);
 
         // Request results from server
         ResultsRequestMessage resultsReq;
         resultsReq.port = config.port;
-        resultsReq.clientResult = result.clientResult;  // Include client's result
+        resultsReq.clientResult = result.clientResult;  // Include client's result (now analyzed)
         
         std::cout << "[ControlClient] Requesting results from server..." << std::endl;
         if (!SendMessage(controlSocket, SerializeResultsRequest(resultsReq))) {
@@ -234,11 +241,11 @@ PortTestResult ControlClient::ExecutePortTest(const TestConfig& config) {
         }
 
         ResultsResponseMessage resultsMsg = DeserializeResultsResponse(responseMsg);
-        result.serverResult = resultsMsg.serverResult;
+        result.serverResult = resultsMsg.serverResult; // Already analyzed by server
         
         std::cout << "[ControlClient] Received server results" << std::endl;
 
-        // Determine overall success
+        // Determine overall success (based on analyzed results)
         result.success = result.clientResult.success && result.serverResult.success;
 
         Disconnect(controlSocket);
@@ -330,7 +337,8 @@ void ControlClient::PrintResults(const std::vector<PortTestResult>& results,
     int passedTests = 0;
 
     for (const auto& portResult : results) {
-        if (!portResult.success) {
+        if (!portResult.success && portResult.serverResult.success && portResult.clientResult.success) {
+            // Case where connection/setup failed, not the test itself
             std::cout << "Port " << portResult.port << " FAILED: " << portResult.errorMessage << std::endl;
             allOk = false;
             totalTests += 2;
@@ -340,27 +348,21 @@ void ControlClient::PrintResults(const std::vector<PortTestResult>& results,
         // Server results
         {
             const auto& res = portResult.serverResult;
-            bool packetsMatch = (res.totalPackets == expectedPackets);
-            bool bytesMatch = (res.totalBytes == expectedBytes);
-            bool noErrors = (res.sequenceErrors == 0 && res.checksumErrors == 0 && res.contentMismatches == 0);
-            bool pass = res.success && packetsMatch && bytesMatch && noErrors;
-
             std::cout << std::left << std::setw(8) << res.role
                       << std::setw(8) << res.port
                       << std::setw(15) << std::fixed << std::setprecision(2) << res.duration
                       << std::setw(18) << res.throughput
                       << std::setw(22) << res.totalBytes
                       << std::setw(24) << res.totalPackets
-                      << std::setw(10) << (pass ? "PASS" : "FAIL") << std::endl;
+                      << std::setw(10) << (res.success ? "PASS" : "FAIL") << std::endl;
 
-            if (!pass) {
+            if (!res.success) {
                 allOk = false;
-                if (!packetsMatch || !bytesMatch || !noErrors) {
-                    std::cout << "  -> Expected " << expectedPackets << " packets (" << expectedBytes << " bytes)";
-                    if (!noErrors) {
-                        std::cout << ", Errors detected";
-                    }
-                    std::cout << std::endl;
+                if (!res.failureReason.empty()) {
+                    std::cout << "  -> " << res.failureReason << std::endl;
+                } else if (!portResult.errorMessage.empty() && portResult.serverResult.role.empty()) {
+                     // Fallback if result was empty/failed setup
+                     std::cout << "  -> Setup/Connection Failed: " << portResult.errorMessage << std::endl;
                 }
             } else {
                 passedTests++;
@@ -371,27 +373,20 @@ void ControlClient::PrintResults(const std::vector<PortTestResult>& results,
         // Client results
         {
             const auto& res = portResult.clientResult;
-            bool packetsMatch = (res.totalPackets == expectedPackets);
-            bool bytesMatch = (res.totalBytes == expectedBytes);
-            bool noErrors = (res.sequenceErrors == 0 && res.checksumErrors == 0 && res.contentMismatches == 0);
-            bool pass = res.success && packetsMatch && bytesMatch && noErrors;
-
             std::cout << std::left << std::setw(8) << res.role
                       << std::setw(8) << res.port
                       << std::setw(15) << std::fixed << std::setprecision(2) << res.duration
                       << std::setw(18) << res.throughput
                       << std::setw(22) << res.totalBytes
                       << std::setw(24) << res.totalPackets
-                      << std::setw(10) << (pass ? "PASS" : "FAIL") << std::endl;
+                      << std::setw(10) << (res.success ? "PASS" : "FAIL") << std::endl;
 
-            if (!pass) {
+            if (!res.success) {
                 allOk = false;
-                if (!packetsMatch || !bytesMatch || !noErrors) {
-                    std::cout << "  -> Expected " << expectedPackets << " packets (" << expectedBytes << " bytes)";
-                    if (!noErrors) {
-                        std::cout << ", Errors detected";
-                    }
-                    std::cout << std::endl;
+                if (!res.failureReason.empty()) {
+                     std::cout << "  -> " << res.failureReason << std::endl;
+                } else if (!portResult.errorMessage.empty() && portResult.clientResult.role.empty()) {
+                     std::cout << "  -> Setup/Connection Failed: " << portResult.errorMessage << std::endl;
                 }
             } else {
                 passedTests++;

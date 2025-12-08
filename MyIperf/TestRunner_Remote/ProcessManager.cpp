@@ -298,9 +298,16 @@ TestResult ProcessManager::ParseTestSummary(const std::string& output,
     } else {
         result.success = false;
         if (output.find("FINAL TEST SUMMARY") == std::string::npos) {
-            result.failureReason = "Failed to find FINAL TEST SUMMARY in output. Process may have exited before completion.";
+            if (output.find("[TestRunner] Server process exited early") != std::string::npos || 
+                output.find("[ProcessManager] Server process exited early") != std::string::npos) {
+                 result.failureReason = "Server process exited early before completion.";
+            } else if (output.find("timed out") != std::string::npos) {
+                 result.failureReason = "Process timed out before FINAL TEST SUMMARY was printed.";
+            } else {
+                 result.failureReason = "Failed to find FINAL TEST SUMMARY in output. Process may have exited before completion.";
+            }
         } else {
-            result.failureReason = "Failed to match test summary regex for role " + role + ". Output format may have changed or be incomplete.";
+             result.failureReason = "Failed to match test summary regex for role " + role + ". Output format may have changed or be incomplete.";
         }
         std::cerr << "[ProcessManager] Parse warning for port " << port << " (" << role << "): " << result.failureReason << std::endl;
     }
@@ -308,154 +315,7 @@ TestResult ProcessManager::ParseTestSummary(const std::string& output,
     return result;
 }
 
-// ===== Named Pipe-based method implementations =====
 
-bool ProcessManager::LaunchProcessNoPipe(const std::string& cmdline, ProcessHandles& handles) {
-    STARTUPINFOA siStartInfo;
-    ZeroMemory(&siStartInfo, sizeof(STARTUPINFOA));
-    siStartInfo.cb = sizeof(STARTUPINFOA);
-
-    std::vector<char> cmdline_writable(cmdline.begin(), cmdline.end());
-    cmdline_writable.push_back('\0');
-
-    BOOL bSuccess = CreateProcessA(
-        NULL, &cmdline_writable[0], NULL, NULL, FALSE,
-        CREATE_NO_WINDOW, NULL, NULL, &siStartInfo, &handles.processInfo
-    );
-
-    if (!bSuccess) {
-        DWORD err = GetLastError();
-        std::cerr << "[ProcessManager] Error: CreateProcess failed with code " << err
-                  << " (cmdline: " << cmdline << ")" << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool ProcessManager::LaunchIPEFTCServerWithPipe(const std::string& executablePath,
-                                                const TestConfig& config,
-                                                ProcessHandles& handles,
-                                                std::shared_ptr<PipeReader>& pipeReader) {
-    // Generate pipe name: \\.\\pipe\\myiperflog_server_0.0.0.0_<port>
-    std::stringstream pipeName;
-    pipeName << "\\\\.\\pipe\\myiperflog_server_0.0.0.0_" << config.port;
-    
-    // Create and start pipe reader
-    pipeReader = std::make_shared<PipeReader>(pipeName.str());
-    if (!pipeReader->Start()) {
-        std::cerr << "[ProcessManager] Failed to start pipe reader" << std::endl;
-        return false;
-    }
-    
-    // Give pipe reader a moment to initialize
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    // Build command line (MyIperf will create the pipe and write logs to it)
-    std::stringstream cmd;
-    cmd << executablePath 
-        << " --mode server"
-        << " --target 0.0.0.0"
-        << " --port " << config.port
-        << " --save-logs " << (config.saveLogs ? "true" : "false");
-    
-    std::cout << "[ProcessManager] Launching IPEFTC server with pipe: " << cmd.str() << std::endl;
-    return LaunchProcessNoPipe(cmd.str(), handles);
-}
-
-bool ProcessManager::LaunchIPEFTCClientWithPipe(const std::string& executablePath,
-                                                const std::string& targetIP,
-                                                const TestConfig& config,
-                                                ProcessHandles& handles,
-                                                std::shared_ptr<PipeReader>& pipeReader) {
-    // Generate pipe name: \\.\\pipe\\myiperflog_client_<targetIP>_<port>
-    std::stringstream pipeName;
-    pipeName << "\\\\.\\pipe\\myiperflog_client_" << targetIP << "_" << config.port;
-    
-    // Create and start pipe reader
-    pipeReader = std::make_shared<PipeReader>(pipeName.str());
-    if (!pipeReader->Start()) {
-        std::cerr << "[ProcessManager] Failed to start pipe reader" << std::endl;
-        return false;
-    }
-    
-    // Give pipe reader a moment to initialize
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    // Build command line
-    std::stringstream cmd;
-    cmd << executablePath 
-        << " --mode client"
-        << " --target " << targetIP
-        << " --port " << config.port
-        << " --packet-size " << config.packetSize
-        << " --num-packets " << config.numPackets
-        << " --interval-ms " << config.sendIntervalMs
-        << " --save-logs " << (config.saveLogs ? "true" : "false");
-    
-    std::cout << "[ProcessManager] Launching IPEFTC client with pipe: " << cmd.str() << std::endl;
-    return LaunchProcessNoPipe(cmd.str(), handles);
-}
-
-bool ProcessManager::WaitForServerReadyFromPipe(std::shared_ptr<PipeReader>& pipeReader,
-                                                ProcessHandles& handles,
-                                                int timeoutMs) {
-    const std::string readyMsg = "Server waiting for a client connection";
-    auto startTime = std::chrono::steady_clock::now();
-    const auto timeout = std::chrono::milliseconds(timeoutMs);
-
-    while (std::chrono::steady_clock::now() - startTime < timeout) {
-        // Get accumulated logs from pipe reader
-        std::string output = pipeReader->GetAccumulatedLogs();
-        
-        if (output.find(readyMsg) != std::string::npos) {
-            std::cout << "[ProcessManager] Server is ready (from pipe)!" << std::endl;
-            return true;
-        }
-
-        // Check if process exited early
-        DWORD exitCode = 0;
-        if (GetExitCodeProcess(handles.processInfo.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-            std::cerr << "[ProcessManager] Server process exited early during startup (exitCode=" 
-                     << exitCode << ")" << std::endl;
-            return false;
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-
-    std::cerr << "[ProcessManager] Timeout waiting for server to be ready (from pipe)" << std::endl;
-    return false;
-}
-
-std::string ProcessManager::CaptureProcessOutputFromPipe(ProcessHandles& handles,
-                                                         std::shared_ptr<PipeReader>& pipeReader) {
-    // Wait for process to complete
-    while (true) {
-        DWORD exitCode = 0;
-        if (GetExitCodeProcess(handles.processInfo.hProcess, &exitCode)) {
-            if (exitCode != STILL_ACTIVE) {
-                break;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    
-    // Ensure process has fully terminated
-    WaitForSingleObject(handles.processInfo.hProcess, INFINITE);
-    
-    // Give pipe reader a moment to receive any final logs
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
-    // Stop pipe reader and get all accumulated logs
-    pipeReader->Stop();
-    std::string output = pipeReader->GetAccumulatedLogs();
-    
-    std::cout << "[ProcessManager] Captured " << output.length() 
-              << " bytes from pipe" << std::endl;
-    
-    return output;
-}
 
 } // namespace TestRunner2
 

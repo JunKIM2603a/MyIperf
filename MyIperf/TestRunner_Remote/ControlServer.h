@@ -33,7 +33,6 @@ struct Session {
     SessionState state;
     TestConfig config;
     ProcessHandles ipeftcProcess;
-    std::shared_ptr<PipeReader> pipeReader;  // For Named Pipe log collection
     std::string processOutput;
     TestResult result;
     std::thread workerThread;

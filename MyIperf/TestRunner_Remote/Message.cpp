@@ -207,5 +207,51 @@ ErrorMessage DeserializeError(const std::string& jsonStr) {
     return msg;
 }
 
+void AnalyzeTestResult(TestResult& result, long long expectedPackets, long long expectedBytes) {
+    result.expectedPackets = expectedPackets;
+    result.expectedBytes = expectedBytes;
+    
+    // Only perform validation if the test was initially marked as successful (parsing succeeded)
+    if (result.success) {
+        bool validationFailed = false;
+        std::string failureDetails;
+        
+        // 1. Check packet count
+        if (result.totalPackets != expectedPackets) {
+            validationFailed = true;
+            failureDetails += "Packet count mismatch (Expected: " + std::to_string(expectedPackets) + 
+                              ", Got: " + std::to_string(result.totalPackets) + "). ";
+        }
+        
+        // 2. Check byte count
+        if (result.totalBytes != expectedBytes) {
+            validationFailed = true;
+            failureDetails += "Byte count mismatch (Expected: " + std::to_string(expectedBytes) + 
+                              ", Got: " + std::to_string(result.totalBytes) + "). ";
+        }
+        
+        // 3. Check error counters
+        if (result.sequenceErrors > 0) {
+            validationFailed = true;
+            failureDetails += "Sequence errors detected (" + std::to_string(result.sequenceErrors) + "). ";
+        }
+        if (result.checksumErrors > 0) {
+            validationFailed = true;
+            failureDetails += "Checksum errors detected (" + std::to_string(result.checksumErrors) + "). ";
+        }
+        if (result.contentMismatches > 0) {
+            validationFailed = true;
+            failureDetails += "Content mismatches detected (" + std::to_string(result.contentMismatches) + "). ";
+        }
+        
+        if (validationFailed) {
+            result.success = false;
+            result.failureReason = failureDetails;
+        } else {
+            result.failureReason = ""; // Clear any previous failure reason if validation passes
+        }
+    }
+}
+
 } // namespace TestRunner2
 
