@@ -1,257 +1,234 @@
 #include "Message.h"
 #include "../nlohmann/json.hpp"
-#include <stdexcept>
+#include <iostream>
 
 using json = nlohmann::json;
 
 namespace TestRunner2 {
 
-// Helper to create base JSON with message type
-json CreateBaseJson(MessageType type) {
-    json j;
-    j["messageType"] = MessageTypeToString(type);
-    return j;
+// Helper to convert TestConfig to JSON
+void to_json(json &j, const TestConfig &c) {
+  j = json{{"mode", c.mode},
+           {"configPath", c.configPath},
+           {"targetIP", c.targetIP},
+           {"port", c.port},
+           {"packetSize", c.packetSize},
+           {"numPackets", c.numPackets},
+           {"sendIntervalMs", c.sendIntervalMs},
+           {"saveLogs", c.saveLogs},
+           {"protocol", c.protocol}};
 }
 
-std::string SerializeConfigRequest(const ConfigRequestMessage& msg) {
-    json j = CreateBaseJson(MessageType::CONFIG_REQUEST);
-    j["testConfig"] = {
-        {"port", msg.config.port},
-        {"packetSize", msg.config.packetSize},
-        {"numPackets", msg.config.numPackets},
-        {"sendIntervalMs", msg.config.sendIntervalMs},
-        {"protocol", msg.config.protocol},
-        {"saveLogs", msg.config.saveLogs}
-    };
-    return j.dump();
+// Helper to convert JSON to TestConfig
+void from_json(const json &j, TestConfig &c) {
+  j.at("mode").get_to(c.mode);
+  j.at("configPath").get_to(c.configPath);
+  j.at("targetIP").get_to(c.targetIP);
+  j.at("port").get_to(c.port);
+  j.at("packetSize").get_to(c.packetSize);
+  j.at("numPackets").get_to(c.numPackets);
+  j.at("sendIntervalMs").get_to(c.sendIntervalMs);
+  j.at("saveLogs").get_to(c.saveLogs);
+  j.at("protocol").get_to(c.protocol);
 }
 
-std::string SerializeServerReady(const ServerReadyMessage& msg) {
-    json j = CreateBaseJson(MessageType::SERVER_READY);
-    j["port"] = msg.port;
-    j["serverIP"] = msg.serverIP;
-    return j.dump();
+// Helper to convert TestResult to JSON
+void to_json(json &j, const TestResult &r) {
+  j = json{{"role", r.role},
+           {"port", r.port},
+           {"duration", r.duration},
+           {"throughput", r.throughput},
+           {"hostTotalBytes", r.hostTotalBytes},
+           {"totalBytes", r.totalBytes},
+           {"totalPackets", r.totalPackets},
+           {"expectedBytes", r.expectedBytes},
+           {"expectedPackets", r.expectedPackets},
+           {"sequenceErrors", r.sequenceErrors},
+           {"checksumErrors", r.checksumErrors},
+           {"contentMismatches", r.contentMismatches},
+           {"failureReason", r.failureReason},
+           {"success", r.success}};
 }
 
-std::string SerializeTestComplete(const TestCompleteMessage& msg) {
-    json j = CreateBaseJson(MessageType::TEST_COMPLETE);
-    j["port"] = msg.port;
-    j["success"] = msg.success;
-    return j.dump();
+// Helper to convert JSON to TestResult
+void from_json(const json &j, TestResult &r) {
+  j.at("role").get_to(r.role);
+  j.at("port").get_to(r.port);
+  j.at("duration").get_to(r.duration);
+  j.at("throughput").get_to(r.throughput);
+  if (j.contains("hostTotalBytes"))
+    j.at("hostTotalBytes").get_to(r.hostTotalBytes);
+  j.at("totalBytes").get_to(r.totalBytes);
+  j.at("totalPackets").get_to(r.totalPackets);
+  j.at("expectedBytes").get_to(r.expectedBytes);
+  j.at("expectedPackets").get_to(r.expectedPackets);
+  j.at("sequenceErrors").get_to(r.sequenceErrors);
+  j.at("checksumErrors").get_to(r.checksumErrors);
+  j.at("contentMismatches").get_to(r.contentMismatches);
+  j.at("failureReason").get_to(r.failureReason);
+  j.at("success").get_to(r.success);
 }
 
-std::string SerializeResultsRequest(const ResultsRequestMessage& msg) {
-    json j = CreateBaseJson(MessageType::RESULTS_REQUEST);
-    j["port"] = msg.port;
-    j["clientResult"] = {
-        {"role", msg.clientResult.role},
-        {"port", msg.clientResult.port},
-        {"duration", msg.clientResult.duration},
-        {"throughput", msg.clientResult.throughput},
-        {"totalBytes", msg.clientResult.totalBytes},
-        {"totalPackets", msg.clientResult.totalPackets},
-        {"expectedBytes", msg.clientResult.expectedBytes},
-        {"expectedPackets", msg.clientResult.expectedPackets},
-        {"sequenceErrors", msg.clientResult.sequenceErrors},
-        {"checksumErrors", msg.clientResult.checksumErrors},
-        {"contentMismatches", msg.clientResult.contentMismatches},
-        {"failureReason", msg.clientResult.failureReason},
-        {"success", msg.clientResult.success}
-    };
-    return j.dump();
+// Serialization implementations
+std::string SerializeMessage(const Message &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  if (!msg.errorMessage.empty()) {
+    j["errorMessage"] = msg.errorMessage;
+  }
+  return j.dump();
 }
 
-std::string SerializeResultsResponse(const ResultsResponseMessage& msg) {
-    json j = CreateBaseJson(MessageType::RESULTS_RESPONSE);
-    j["serverResult"] = {
-        {"role", msg.serverResult.role},
-        {"port", msg.serverResult.port},
-        {"duration", msg.serverResult.duration},
-        {"throughput", msg.serverResult.throughput},
-        {"totalBytes", msg.serverResult.totalBytes},
-        {"totalPackets", msg.serverResult.totalPackets},
-        {"expectedBytes", msg.serverResult.expectedBytes},
-        {"expectedPackets", msg.serverResult.expectedPackets},
-        {"sequenceErrors", msg.serverResult.sequenceErrors},
-        {"checksumErrors", msg.serverResult.checksumErrors},
-        {"contentMismatches", msg.serverResult.contentMismatches},
-        {"failureReason", msg.serverResult.failureReason},
-        {"success", msg.serverResult.success}
-    };
-    return j.dump();
+std::string SerializeConfigRequest(const ConfigRequestMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["testConfig"] = msg.config;
+  return j.dump();
 }
 
-std::string SerializeError(const ErrorMessage& msg) {
-    json j = CreateBaseJson(MessageType::ERROR_MESSAGE);
-    j["error"] = msg.error;
-    return j.dump();
+std::string SerializeServerReady(const ServerReadyMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["port"] = msg.port;
+  j["serverIP"] = msg.serverIP;
+  return j.dump();
 }
 
-MessageType GetMessageType(const std::string& jsonStr) {
-    try {
-        json j = json::parse(jsonStr);
-        if (!j.contains("messageType")) {
-            throw std::runtime_error("Missing messageType field");
-        }
-        return StringToMessageType(j["messageType"].get<std::string>());
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to parse message type: ") + e.what());
-    }
+std::string SerializeTestComplete(const TestCompleteMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["port"] = msg.port;
+  j["success"] = msg.success;
+  return j.dump();
 }
 
-ConfigRequestMessage DeserializeConfigRequest(const std::string& jsonStr) {
-    ConfigRequestMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        if (j.contains("testConfig")) {
-            auto& cfg = j["testConfig"];
-            msg.config.port = cfg.value("port", Protocol::DEFAULT_TEST_PORT);
-            msg.config.packetSize = cfg.value("packetSize", 8192);
-            msg.config.numPackets = cfg.value("numPackets", 10000LL);
-            msg.config.sendIntervalMs = cfg.value("sendIntervalMs", 0);
-            msg.config.protocol = cfg.value("protocol", "TCP");
-            msg.config.saveLogs = cfg.value("saveLogs", true);
-        }
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize CONFIG_REQUEST: ") + e.what());
-    }
-    return msg;
+std::string SerializeResultsRequest(const ResultsRequestMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["port"] = msg.port;
+  j["clientResult"] = msg.clientResult;
+  return j.dump();
 }
 
-ServerReadyMessage DeserializeServerReady(const std::string& jsonStr) {
-    ServerReadyMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        msg.port = j.value("port", 0);
-        msg.serverIP = j.value("serverIP", "");
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize SERVER_READY: ") + e.what());
-    }
-    return msg;
+std::string SerializeResultsResponse(const ResultsResponseMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["serverResult"] = msg.serverResult;
+  return j.dump();
 }
 
-TestCompleteMessage DeserializeTestComplete(const std::string& jsonStr) {
-    TestCompleteMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        msg.port = j.value("port", 0);
-        msg.success = j.value("success", false);
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize TEST_COMPLETE: ") + e.what());
-    }
-    return msg;
+std::string SerializeError(const ErrorMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  j["error"] = msg.error;
+  return j.dump();
 }
 
-ResultsRequestMessage DeserializeResultsRequest(const std::string& jsonStr) {
-    ResultsRequestMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        msg.port = j.value("port", 0);
-        
-        if (j.contains("clientResult")) {
-            auto& res = j["clientResult"];
-            msg.clientResult.role = res.value("role", "");
-            msg.clientResult.port = res.value("port", 0);
-            msg.clientResult.duration = res.value("duration", 0.0);
-            msg.clientResult.throughput = res.value("throughput", 0.0);
-            msg.clientResult.totalBytes = res.value("totalBytes", 0LL);
-            msg.clientResult.totalPackets = res.value("totalPackets", 0LL);
-            msg.clientResult.expectedBytes = res.value("expectedBytes", 0LL);
-            msg.clientResult.expectedPackets = res.value("expectedPackets", 0LL);
-            msg.clientResult.sequenceErrors = res.value("sequenceErrors", 0LL);
-            msg.clientResult.checksumErrors = res.value("checksumErrors", 0LL);
-            msg.clientResult.contentMismatches = res.value("contentMismatches", 0LL);
-            msg.clientResult.failureReason = res.value("failureReason", "");
-            msg.clientResult.success = res.value("success", false);
-        }
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize RESULTS_REQUEST: ") + e.what());
-    }
-    return msg;
+std::string SerializeServerShutdown(const ServerShutdownMessage &msg) {
+  json j;
+  j["messageType"] = MessageTypeToString(msg.type);
+  return j.dump();
 }
 
-ResultsResponseMessage DeserializeResultsResponse(const std::string& jsonStr) {
-    ResultsResponseMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        if (j.contains("serverResult")) {
-            auto& res = j["serverResult"];
-            msg.serverResult.role = res.value("role", "");
-            msg.serverResult.port = res.value("port", 0);
-            msg.serverResult.duration = res.value("duration", 0.0);
-            msg.serverResult.throughput = res.value("throughput", 0.0);
-            msg.serverResult.totalBytes = res.value("totalBytes", 0LL);
-            msg.serverResult.totalPackets = res.value("totalPackets", 0LL);
-            msg.serverResult.expectedBytes = res.value("expectedBytes", 0LL);
-            msg.serverResult.expectedPackets = res.value("expectedPackets", 0LL);
-            msg.serverResult.sequenceErrors = res.value("sequenceErrors", 0LL);
-            msg.serverResult.checksumErrors = res.value("checksumErrors", 0LL);
-            msg.serverResult.contentMismatches = res.value("contentMismatches", 0LL);
-            msg.serverResult.failureReason = res.value("failureReason", "");
-            msg.serverResult.success = res.value("success", false);
-        }
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize RESULTS_RESPONSE: ") + e.what());
-    }
-    return msg;
+// Deserialization implementations
+MessageType GetMessageType(const std::string &jsonStr) {
+  try {
+    auto j = json::parse(jsonStr);
+    return StringToMessageType(j.at("messageType").get<std::string>());
+  } catch (const std::exception &e) {
+    throw std::runtime_error("Failed to parse message type: " +
+                             std::string(e.what()));
+  }
 }
 
-ErrorMessage DeserializeError(const std::string& jsonStr) {
-    ErrorMessage msg;
-    try {
-        json j = json::parse(jsonStr);
-        msg.error = j.value("error", "Unknown error");
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to deserialize ERROR_MESSAGE: ") + e.what());
-    }
-    return msg;
+ConfigRequestMessage DeserializeConfigRequest(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  ConfigRequestMessage msg;
+  msg.config = j.at("testConfig").get<TestConfig>();
+  return msg;
 }
 
-void AnalyzeTestResult(TestResult& result, long long expectedPackets, long long expectedBytes) {
-    result.expectedPackets = expectedPackets;
-    result.expectedBytes = expectedBytes;
-    
-    // Only perform validation if the test was initially marked as successful (parsing succeeded)
-    if (result.success) {
-        bool validationFailed = false;
-        std::string failureDetails;
-        
-        // 1. Check packet count
-        if (result.totalPackets != expectedPackets) {
-            validationFailed = true;
-            failureDetails += "Packet count mismatch (Expected: " + std::to_string(expectedPackets) + 
-                              ", Got: " + std::to_string(result.totalPackets) + "). ";
-        }
-        
-        // 2. Check byte count
-        if (result.totalBytes != expectedBytes) {
-            validationFailed = true;
-            failureDetails += "Byte count mismatch (Expected: " + std::to_string(expectedBytes) + 
-                              ", Got: " + std::to_string(result.totalBytes) + "). ";
-        }
-        
-        // 3. Check error counters
-        if (result.sequenceErrors > 0) {
-            validationFailed = true;
-            failureDetails += "Sequence errors detected (" + std::to_string(result.sequenceErrors) + "). ";
-        }
-        if (result.checksumErrors > 0) {
-            validationFailed = true;
-            failureDetails += "Checksum errors detected (" + std::to_string(result.checksumErrors) + "). ";
-        }
-        if (result.contentMismatches > 0) {
-            validationFailed = true;
-            failureDetails += "Content mismatches detected (" + std::to_string(result.contentMismatches) + "). ";
-        }
-        
-        if (validationFailed) {
-            result.success = false;
-            result.failureReason = failureDetails;
-        } else {
-            result.failureReason = ""; // Clear any previous failure reason if validation passes
-        }
-    }
+ServerReadyMessage DeserializeServerReady(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  ServerReadyMessage msg;
+  msg.port = j.at("port").get<int>();
+  msg.serverIP = j.at("serverIP").get<std::string>();
+  return msg;
+}
+
+TestCompleteMessage DeserializeTestComplete(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  TestCompleteMessage msg;
+  msg.port = j.at("port").get<int>();
+  msg.success = j.at("success").get<bool>();
+  return msg;
+}
+
+ResultsRequestMessage DeserializeResultsRequest(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  ResultsRequestMessage msg;
+  msg.port = j.at("port").get<int>();
+  msg.clientResult = j.at("clientResult").get<TestResult>();
+  return msg;
+}
+
+ResultsResponseMessage DeserializeResultsResponse(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  ResultsResponseMessage msg;
+  msg.serverResult = j.at("serverResult").get<TestResult>();
+  return msg;
+}
+
+ErrorMessage DeserializeError(const std::string &jsonStr) {
+  auto j = json::parse(jsonStr);
+  ErrorMessage msg;
+  msg.error = j.at("error").get<std::string>();
+  return msg;
+}
+
+ServerShutdownMessage DeserializeServerShutdown(const std::string &jsonStr) {
+  return ServerShutdownMessage();
+}
+
+void AnalyzeTestResult(TestResult &result, long long expectedPackets,
+                       long long expectedBytes) {
+  result.expectedPackets = expectedPackets;
+  result.expectedBytes = expectedBytes;
+
+  bool passed = true;
+  std::string reason;
+
+  if (result.totalPackets != expectedPackets) {
+    passed = false;
+    reason +=
+        "Packet count mismatch (Rx: " + std::to_string(result.totalPackets) +
+        ", Exp: " + std::to_string(expectedPackets) + "); ";
+  }
+
+  if (result.sequenceErrors > 0) {
+    passed = false;
+    reason += "Sequence errors detected (" +
+              std::to_string(result.sequenceErrors) + "); ";
+  }
+
+  if (result.checksumErrors > 0) {
+    passed = false;
+    reason += "Checksum errors detected (" +
+              std::to_string(result.checksumErrors) + "); ";
+  }
+
+  if (result.contentMismatches > 0) {
+    passed = false;
+    reason += "Content mismatches detected (" +
+              std::to_string(result.contentMismatches) + "); ";
+  }
+
+  result.success = passed;
+  result.failureReason = reason;
+
+  if (passed && result.failureReason.empty()) {
+    result.failureReason = "Test passed successfully";
+  }
 }
 
 } // namespace TestRunner2
-

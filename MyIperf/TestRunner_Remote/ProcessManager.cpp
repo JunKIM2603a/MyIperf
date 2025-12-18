@@ -1,321 +1,305 @@
 #include "ProcessManager.h"
 #include <iostream>
-#include <sstream>
 #include <regex>
-#include <chrono>
+#include <sstream>
 #include <thread>
+#include <vector>
 
 namespace TestRunner2 {
 
-ProcessManager::ProcessManager() {
+std::string ProcessManager::GetIPEFTCPath() {
+  if (!overrideIPEFTCPath.empty()) {
+    return overrideIPEFTCPath;
+  }
+  // Try default relative path from cmake build structure:
+  // TestRunner2/build/Release/TestRunner2.exe ->
+  // TestRunner2/../build/Release/IPEFTC.exe (This logic depends on where
+  // TestRunner is run from) Assuming standard build:
+  // build/Release/TestRunner_Remote.exe
+  // We want to find IPEFTC.exe in the same directory or specific relative path.
+  // For now, assume it's in the same directory or ../Release/IPEFTC.exe
+  return "IPEFTC.exe"; // Rely on PATH or being in same dir for simplicity, can
+                       // be overridden by args
 }
 
-ProcessManager::~ProcessManager() {
+void ProcessManager::SetIPEFTCPath(const std::string &path) {
+  overrideIPEFTCPath = path;
 }
 
-bool ProcessManager::LaunchProcess(const std::string& cmdline, ProcessHandles& handles) {
-    SECURITY_ATTRIBUTES saAttr;
-    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
-    saAttr.bInheritHandle = TRUE;
-    saAttr.lpSecurityDescriptor = NULL;
+bool ProcessManager::CreatePipes(HANDLE &hRead, HANDLE &hWrite) {
+  SECURITY_ATTRIBUTES saAttr;
+  saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+  saAttr.bInheritHandle = TRUE;
+  saAttr.lpSecurityDescriptor = NULL;
 
-    if (!CreatePipe(&handles.stdOutRead, &handles.stdOutWrite, &saAttr, 0)) {
-        std::cerr << "[ProcessManager] Error: CreatePipe failed" << std::endl;
-        return false;
-    }
-    if (!SetHandleInformation(handles.stdOutRead, HANDLE_FLAG_INHERIT, 0)) {
-        std::cerr << "[ProcessManager] Error: SetHandleInformation failed" << std::endl;
-        return false;
-    }
+  if (!CreatePipe(&hRead, &hWrite, &saAttr, 0)) {
+    return false;
+  }
 
-    STARTUPINFOA siStartInfo;
-    ZeroMemory(&siStartInfo, sizeof(STARTUPINFOA));
-    siStartInfo.cb = sizeof(STARTUPINFOA);
-    siStartInfo.hStdError = handles.stdOutWrite;
-    siStartInfo.hStdOutput = handles.stdOutWrite;
-    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+  // Ensure the read handle to the pipe for STDOUT is not inherited.
+  if (!SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0)) {
+    return false;
+  }
+  return true;
+}
 
-    std::vector<char> cmdline_writable(cmdline.begin(), cmdline.end());
-    cmdline_writable.push_back('\0');
+bool ProcessManager::LaunchIPEFTCServer(const std::string &ipeftcPath,
+                                        TestConfig config,
+                                        ProcessHandles &handles) {
+  std::string cmdLine = ipeftcPath + " --mode server";
+  if (!config.targetIP.empty()) {
+    cmdLine += " --target " + config.targetIP;
+  }
+  if (config.port > 0) {
+    cmdLine += " --port " + std::to_string(config.port);
+  }
+  cmdLine +=
+      config.saveLogs == true ? " --save-logs true" : " --save-logs false";
 
-    BOOL bSuccess = CreateProcessA(
-        NULL, &cmdline_writable[0], NULL, NULL, TRUE,
-        CREATE_NO_WINDOW, NULL, NULL, &siStartInfo, &handles.processInfo
-    );
+  if (!CreatePipes(handles.stdOutRead, handles.stdOutWrite)) {
+    std::cerr << "Failed to create pipes" << std::endl;
+    return false;
+  }
 
-    if (!bSuccess) {
-        DWORD err = GetLastError();
-        CloseHandle(handles.stdOutWrite);
-        CloseHandle(handles.stdOutRead);
-        std::cerr << "[ProcessManager] Error: CreateProcess failed with code " << err
-                  << " (cmdline: " << cmdline << ")" << std::endl;
-        return false;
-    }
+  STARTUPINFOA si;
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(si);
+  si.hStdError = handles.stdOutWrite;
+  si.hStdOutput = handles.stdOutWrite;
+  si.dwFlags |= STARTF_USESTDHANDLES;
 
-    CloseHandle(handles.stdOutWrite); // Close the write end in the parent
+  if (!CreateProcessA(NULL, const_cast<char *>(cmdLine.c_str()), NULL, NULL,
+                      TRUE, 0, NULL, NULL, &si, &handles.processInfo)) {
+    std::cerr << "CreateProcess failed (" << GetLastError()
+              << "). Cmd: " << cmdLine << std::endl;
+    CloseHandle(handles.stdOutRead);
+    CloseHandle(handles.stdOutWrite);
+    return false;
+  }
+
+  return true;
+}
+
+bool ProcessManager::LaunchIPEFTCClient(const std::string &ipeftcPath,
+                                        const TestConfig &config,
+                                        ProcessHandles &handles) {
+
+  std::string cmdLine = ipeftcPath + " --mode client";
+  if (!config.targetIP.empty()) {
+    cmdLine += " --target " + config.targetIP;
+  }
+  if (config.port > 0) {
+    cmdLine += " --port " + std::to_string(config.port);
+  }
+  if (config.packetSize > 0) {
+    cmdLine += " --packet-size " + std::to_string(config.packetSize);
+  }
+  if (config.numPackets > 0) {
+    cmdLine += " --num-packets " + std::to_string(config.numPackets);
+  }
+  cmdLine +=
+      config.saveLogs == true ? " --save-logs true" : " --save-logs false";
+
+  if (config.sendIntervalMs > 0) {
+    cmdLine += " --interval-ms " + std::to_string(config.sendIntervalMs);
+  }
+
+  if (!CreatePipes(handles.stdOutRead, handles.stdOutWrite)) {
+    std::cerr << "Failed to create pipes" << std::endl;
+    return false;
+  }
+
+  STARTUPINFOA si;
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(si);
+  si.hStdError = handles.stdOutWrite;
+  si.hStdOutput = handles.stdOutWrite;
+  si.dwFlags |= STARTF_USESTDHANDLES;
+
+  if (!CreateProcessA(NULL, const_cast<char *>(cmdLine.c_str()), NULL, NULL,
+                      TRUE, 0, NULL, NULL, &si, &handles.processInfo)) {
+    std::cerr << "CreateProcess failed (" << GetLastError()
+              << "). Cmd: " << cmdLine << std::endl;
+    CloseHandle(handles.stdOutRead);
+    CloseHandle(handles.stdOutWrite);
+    return false;
+  }
+
+  return true;
+}
+
+void ProcessManager::TerminateProcess(ProcessHandles &handles) {
+  if (handles.processInfo.hProcess) {
+    ::TerminateProcess(handles.processInfo.hProcess, 0);
+    WaitForSingleObject(handles.processInfo.hProcess, 2000);
+    CloseHandle(handles.processInfo.hProcess);
+    CloseHandle(handles.processInfo.hThread);
+    handles.processInfo.hProcess = NULL;
+  }
+  if (handles.stdOutRead) {
+    CloseHandle(handles.stdOutRead);
+    handles.stdOutRead = NULL;
+  }
+  if (handles.stdOutWrite) {
+    CloseHandle(handles.stdOutWrite);
     handles.stdOutWrite = NULL;
-    return true;
+  }
 }
 
-bool ProcessManager::LaunchIPEFTCServer(const std::string& executablePath,
-                                       const TestConfig& config,
-                                       ProcessHandles& handles) {
-    std::stringstream cmd;
-    cmd << executablePath 
-        << " --mode server"
-        << " --target 0.0.0.0"
-        << " --port " << config.port
-        << " --save-logs " << (config.saveLogs ? "true" : "false");
-    
-    std::cout << "[ProcessManager] Launching IPEFTC server: " << cmd.str() << std::endl;
-    return LaunchProcess(cmd.str(), handles);
+std::string
+ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
+  // Close write end of pipe so ReadFile loop terminates when process closes its
+  // write end
+  if (handles.stdOutWrite) {
+    CloseHandle(handles.stdOutWrite);
+    handles.stdOutWrite = NULL;
+  }
+
+  std::string output;
+  char buffer[4096];
+  DWORD bytesRead;
+
+  while (true) {
+    if (!ReadFile(handles.stdOutRead, buffer, sizeof(buffer) - 1, &bytesRead,
+                  NULL) ||
+        bytesRead == 0) {
+      break;
+    }
+    buffer[bytesRead] = '\0';
+    output += buffer;
+    std::cout << buffer; // Echo to console for visibility
+  }
+
+  WaitForSingleObject(handles.processInfo.hProcess, INFINITE);
+
+  if (handles.stdOutRead) {
+    CloseHandle(handles.stdOutRead);
+    handles.stdOutRead = NULL;
+  }
+  if (handles.processInfo.hProcess) {
+    CloseHandle(handles.processInfo.hProcess);
+    handles.processInfo.hProcess = NULL;
+  }
+  if (handles.processInfo.hThread) {
+    CloseHandle(handles.processInfo.hThread);
+    handles.processInfo.hThread = NULL;
+  }
+
+  return output;
 }
 
-bool ProcessManager::LaunchIPEFTCClient(const std::string& executablePath,
-                                       const std::string& targetIP,
-                                       const TestConfig& config,
-                                       ProcessHandles& handles) {
-    std::stringstream cmd;
-    cmd << executablePath 
-        << " --mode client"
-        << " --target " << targetIP
-        << " --port " << config.port
-        << " --packet-size " << config.packetSize
-        << " --num-packets " << config.numPackets
-        << " --interval-ms " << config.sendIntervalMs
-        << " --save-logs " << (config.saveLogs ? "true" : "false");
-    
-    std::cout << "[ProcessManager] Launching IPEFTC client: " << cmd.str() << std::endl;
-    return LaunchProcess(cmd.str(), handles);
+TestResult ProcessManager::ParseOutput(const std::string &output,
+                                       const std::string &role, int port) {
+  TestResult result;
+  result.role = role;
+  result.port = port;
+
+  // Simple regex parsing based on typical MyIperf output
+  // Adjust these regexes to match actual output format of IPEFTC
+  // Example IPEFTC output line:
+  // "Test Duration: 5.00 s"
+  // "Or throughput lines..."
+
+  // NOTE: This parsing logic needs to be robust against variation.
+  // Using simple string search for now if regex is too brittle, or specific key
+  // phrases.
+
+  try {
+    // 1. Parse Duration
+    std::regex durationRegex(R"(Test Duration:\s*([\d\.]+)\s*s)");
+    std::smatch match;
+    if (std::regex_search(output, match, durationRegex)) {
+      result.duration = std::stod(match[1]);
+    }
+
+    // 2. Parse Throughput
+    // Looking for "Throughput: 123.45 Mbps" or similar
+    std::regex throughputRegex(R"(Throughput:\s*([\d\.]+)\s*Mbps)");
+    if (std::regex_search(output, match, throughputRegex)) {
+      result.throughput = std::stod(match[1]);
+    }
+
+    // 3. Parse Total Bytes
+    // Look for "Total Bytes Received: 123456" OR "Total Bytes Sent: 123456"
+    // Since we are parsing based on Role, we might want to be specific, or just
+    // grab the one that appears in the summary block. The IPEFTC summary prints
+    // both, but usually we care about "Sent" for Sender and "Received" for
+    // Receiver. However, the ProcessManager doesn't fully know if it's looking
+    // at the "sender" or "receiver" summary block specifically if they are
+    // mixed. But typically: Client (Sender) log has "Client-side (sent): ..."
+    // Server (Receiver) log has "Server-side (received): ..."
+    // Let's try to capture the relevant one.
+
+    // Simplification: Match "Total Bytes.*:\s*(\d+)" and likely take the last
+    // one or specific one? Actually, relying on the test role passed in `role`
+    // might be better or just grabbing "Total Bytes Sent" or "Total Bytes
+    // Received" If successful, IPEFTC usually prints a final summary.
+
+    // Try explicit matches first
+    std::regex bytesSentRegex(R"(Total Bytes Sent:\s*(\d+))");
+    std::regex bytesRecvRegex(R"(Total Bytes Received:\s*(\d+))");
+
+    if (std::regex_search(output, match, bytesSentRegex)) {
+      long long val = std::stoll(match[1]);
+      if (val > 0)
+        result.totalBytes = val; // Prioritize non-zero
+    }
+    if (std::regex_search(output, match, bytesRecvRegex)) {
+      long long val = std::stoll(match[1]);
+      if (val > 0)
+        result.totalBytes =
+            val; // Overwrite if we found recv (mostly what we care about for
+                 // integrity? or depends on role?)
+      // Actually, for "Throughput", usually we care about what was Transferred.
+      // For Client (Sender), Bytes Sent. For Server (Receiver), Bytes Received.
+      // Let's refine based on role if possible, or just take the max?
+      // Let's just catch *any* valid byte count found in the summary.
+    }
+
+    // 4. Parse Total Packets
+    std::regex pktsSentRegex(R"(Total Packets Sent:\s*(\d+))");
+    std::regex pktsRecvRegex(R"(Total Packets Received:\s*(\d+))");
+
+    if (std::regex_search(output, match, pktsSentRegex)) {
+      long long val = std::stoll(match[1]);
+      if (val > 0)
+        result.totalPackets = val;
+    }
+    if (std::regex_search(output, match, pktsRecvRegex)) {
+      long long val = std::stoll(match[1]);
+      if (val > 0)
+        result.totalPackets = val;
+    }
+
+    // 5. Parse Error Counters (if any)
+    std::regex seqErrRegex(R"(Sequence Errors:\s*(\d+))");
+    if (std::regex_search(output, match, seqErrRegex)) {
+      result.sequenceErrors = std::stoll(match[1]);
+    }
+
+    std::regex chkErrRegex(R"(Checksum Errors:\s*(\d+))");
+    if (std::regex_search(output, match, chkErrRegex)) {
+      result.checksumErrors = std::stoll(match[1]);
+    }
+
+    // Determine basic success based on parsed data presence
+    if (result.totalPackets > 0) {
+      result.success = true; // Refined later by AnalyzeTestResult
+    }
+
+  } catch (const std::exception &e) {
+    result.failureReason = "Parsing exception: " + std::string(e.what());
+    result.success = false;
+  }
+
+  // Fallback: if throughput is missing, try to calculate
+  if (result.throughput == 0.0 && result.duration > 0 &&
+      result.totalBytes > 0) {
+    result.throughput =
+        (result.totalBytes * 8.0) / (result.duration * 1000000.0);
+  }
+
+  return result;
 }
-
-bool ProcessManager::WaitForServerReady(ProcessHandles& handles, 
-                                       std::string& output,
-                                       int timeoutMs) {
-    const std::string readyMsg = "Server waiting for a client connection";
-    auto startTime = std::chrono::steady_clock::now();
-    const auto timeout = std::chrono::milliseconds(timeoutMs);
-
-    while (std::chrono::steady_clock::now() - startTime < timeout) {
-        DWORD bytesAvailable = 0;
-        if (PeekNamedPipe(handles.stdOutRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
-            CHAR buffer[4096];
-            DWORD bytesRead = 0;
-            if (ReadFile(handles.stdOutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
-                buffer[bytesRead] = '\0';
-                output.append(buffer, bytesRead);
-                if (output.find(readyMsg) != std::string::npos) {
-                    std::cout << "[ProcessManager] Server is ready!" << std::endl;
-                    return true;
-                }
-            }
-        }
-
-        // Check if process exited early
-        DWORD exitCode = 0;
-        if (GetExitCodeProcess(handles.processInfo.hProcess, &exitCode) && exitCode != STILL_ACTIVE) {
-            output += "\n[ProcessManager] Server process exited early during startup "
-                     "(exitCode=" + std::to_string(exitCode) + ").";
-            std::cerr << "[ProcessManager] Server process exited early" << std::endl;
-            return false;
-        }
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-
-    std::cerr << "[ProcessManager] Timeout waiting for server to be ready" << std::endl;
-    return false;
-}
-
-std::string ProcessManager::CaptureProcessOutput(ProcessHandles& handles) {
-    std::string output;
-    DWORD dwRead;
-    CHAR chBuf[4096];
-    
-    // Continuously read output while process is running
-    while (true) {
-        bool dataRead = false;
-        
-        // Check if data is available and read it first
-        DWORD bytesAvailable = 0;
-        if (PeekNamedPipe(handles.stdOutRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
-            if (ReadFile(handles.stdOutRead, chBuf, sizeof(chBuf) - 1, &dwRead, NULL)) {
-                chBuf[dwRead] = '\0';
-                output.append(chBuf, dwRead);
-                dataRead = true;
-                continue;
-            } else {
-                break;
-            }
-        }
-        
-        // Only check exit status if no data was read
-        if (!dataRead) {
-            DWORD exitCode = 0;
-            if (GetExitCodeProcess(handles.processInfo.hProcess, &exitCode)) {
-                if (exitCode != STILL_ACTIVE) {
-                    break;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-    
-    // Read any remaining output after process exit
-    while (true) {
-        DWORD bytesAvailable = 0;
-        if (PeekNamedPipe(handles.stdOutRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
-            if (ReadFile(handles.stdOutRead, chBuf, sizeof(chBuf), &dwRead, NULL) && dwRead > 0) {
-                output.append(chBuf, dwRead);
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    
-    // Ensure process has fully terminated
-    WaitForSingleObject(handles.processInfo.hProcess, INFINITE);
-    return output;
-}
-
-std::string ProcessManager::ReadAvailableOutput(ProcessHandles& handles) {
-    std::string output;
-    CHAR buffer[4096];
-    DWORD bytesRead = 0;
-    
-    while (true) {
-        DWORD bytesAvailable = 0;
-        if (PeekNamedPipe(handles.stdOutRead, NULL, 0, NULL, &bytesAvailable, NULL) && bytesAvailable > 0) {
-            if (ReadFile(handles.stdOutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-                buffer[bytesRead] = '\0';
-                output.append(buffer, bytesRead);
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    
-    return output;
-}
-
-bool ProcessManager::IsProcessRunning(const ProcessHandles& handles) {
-    if (handles.processInfo.hProcess == NULL) {
-        return false;
-    }
-    
-    DWORD exitCode = 0;
-    if (GetExitCodeProcess(handles.processInfo.hProcess, &exitCode)) {
-        return exitCode == STILL_ACTIVE;
-    }
-    return false;
-}
-
-void ProcessManager::TerminateProcess(ProcessHandles& handles) {
-    if (handles.processInfo.hProcess && IsProcessRunning(handles)) {
-        std::cout << "[ProcessManager] Terminating process..." << std::endl;
-        ::TerminateProcess(handles.processInfo.hProcess, 1);
-        WaitForSingleObject(handles.processInfo.hProcess, 5000);
-    }
-}
-
-void ProcessManager::CloseHandles(ProcessHandles& handles) {
-    if (handles.processInfo.hProcess) {
-        CloseHandle(handles.processInfo.hProcess);
-        handles.processInfo.hProcess = NULL;
-    }
-    if (handles.processInfo.hThread) {
-        CloseHandle(handles.processInfo.hThread);
-        handles.processInfo.hThread = NULL;
-    }
-    if (handles.stdOutRead) {
-        CloseHandle(handles.stdOutRead);
-        handles.stdOutRead = NULL;
-    }
-    if (handles.stdOutWrite) {
-        CloseHandle(handles.stdOutWrite);
-        handles.stdOutWrite = NULL;
-    }
-}
-
-TestResult ProcessManager::ParseTestSummary(const std::string& output, 
-                                           const std::string& role, 
-                                           int port) {
-    TestResult result;
-    result.role = role;
-    result.port = port;
-
-    if (output.empty()) {
-        result.success = false;
-        result.failureReason = "No output captured from process";
-        return result;
-    }
-
-    std::regex summaryRegex;
-    if (role == "Server") {
-        summaryRegex = std::regex(
-            "--- Phase 1: Client to Server ---[\\s\\S]*?Server Received:"
-            "[\\s\\S]*?Total Bytes Received:\\s*(\\d+)"
-            "[\\s\\S]*?Total Packets Received:\\s*(\\d+)"
-            "[\\s\\S]*?Duration:\\s*([\\d\\.]+)\\s*s"
-            "[\\s\\S]*?Throughput:\\s*([\\d\\.]+)\\s*Mbps"
-            "[\\s\\S]*?Sequence Errors:\\s*(\\d+)"
-            "[\\s\\S]*?Failed Checksums:\\s*(\\d+)"
-            "[\\s\\S]*?Content Mismatches:\\s*(\\d+)"
-        );
-    } else { // Client
-        summaryRegex = std::regex(
-            "--- Phase 2: Server to Client ---[\\s\\S]*?Client Received:"
-            "[\\s\\S]*?Total Bytes Received:\\s*(\\d+)"
-            "[\\s\\S]*?Total Packets Received:\\s*(\\d+)"
-            "[\\s\\S]*?Duration:\\s*([\\d\\.]+)\\s*s"
-            "[\\s\\S]*?Throughput:\\s*([\\d\\.]+)\\s*Mbps"
-            "[\\s\\S]*?Sequence Errors:\\s*(\\d+)"
-            "[\\s\\S]*?Failed Checksums:\\s*(\\d+)"
-            "[\\s\\S]*?Content Mismatches:\\s*(\\d+)"
-        );
-    }
-
-    std::smatch matches;
-    if (std::regex_search(output, matches, summaryRegex) && matches.size() == 8) {
-        try {
-            result.totalBytes = std::stoll(matches[1].str());
-            result.totalPackets = std::stoll(matches[2].str());
-            result.duration = std::stod(matches[3].str());
-            result.throughput = std::stod(matches[4].str());
-            result.sequenceErrors = std::stoll(matches[5].str());
-            result.checksumErrors = std::stoll(matches[6].str());
-            result.contentMismatches = std::stoll(matches[7].str());
-            result.success = true;
-        } catch (const std::exception& e) {
-            result.success = false;
-            result.failureReason = "Parse error while converting statistics: " + std::string(e.what());
-            std::cerr << "[ProcessManager] Parse error for port " << port << " (" << role << "): " << e.what() << std::endl;
-        }
-    } else {
-        result.success = false;
-        if (output.find("FINAL TEST SUMMARY") == std::string::npos) {
-            if (output.find("[TestRunner] Server process exited early") != std::string::npos || 
-                output.find("[ProcessManager] Server process exited early") != std::string::npos) {
-                 result.failureReason = "Server process exited early before completion.";
-            } else if (output.find("timed out") != std::string::npos) {
-                 result.failureReason = "Process timed out before FINAL TEST SUMMARY was printed.";
-            } else {
-                 result.failureReason = "Failed to find FINAL TEST SUMMARY in output. Process may have exited before completion.";
-            }
-        } else {
-             result.failureReason = "Failed to match test summary regex for role " + role + ". Output format may have changed or be incomplete.";
-        }
-        std::cerr << "[ProcessManager] Parse warning for port " << port << " (" << role << "): " << result.failureReason << std::endl;
-    }
-
-    return result;
-}
-
-
 
 } // namespace TestRunner2
-

@@ -1,115 +1,47 @@
 #pragma once
 
-// Must include winsock2.h before windows.h to avoid conflicts
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
+#include "Message.h"
+#include "Protocol.h"
+#include <string>
+#include <vector>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>
 
-#pragma comment(lib, "ws2_32.lib")
-
-#include "Protocol.h"
-#include "Message.h"
-#include "ProcessManager.h"
-#include <string>
-#include <map>
-#include <thread>
-#include <mutex>
-#include <atomic>
-#include <memory>
+#pragma comment(lib, "Ws2_32.lib")
 
 namespace TestRunner2 {
 
-// Session information for each connected client
-struct Session {
-    SOCKET clientSocket;
-    SessionState state;
-    TestConfig config;
-    ProcessHandles ipeftcProcess;
-    std::string processOutput;
-    TestResult result;
-    std::thread workerThread;
-    std::atomic<bool> running;
-    
-    Session() : clientSocket(INVALID_SOCKET), 
-                state(SessionState::IDLE),
-                running(false) {}
-};
-
 class ControlServer {
 public:
-    explicit ControlServer(int controlPort = Protocol::DEFAULT_CONTROL_PORT,
-                          const std::string& ipeftcPath = "..\\build\\Release\\IPEFTC.exe",
-                          bool defaultSaveLogs = true);
-    ~ControlServer();
+  ControlServer(int port = Protocol::DEFAULT_CONTROL_PORT);
+  ~ControlServer();
 
-    // Start the server (blocking)
-    bool Start();
-    
-    // Stop the server
-    void Stop();
+  // Start the server loop
+  void Start();
 
-    // Get server status
-    bool IsRunning() const { return m_running; }
+  // Stop the server
+  void Stop();
 
 private:
-    // Initialize Winsock
-    bool InitializeWinsock();
-    
-    // Create and bind server socket
-    bool CreateServerSocket();
-    
-    // Accept client connections (main loop)
-    void AcceptConnections();
-    
-    // Handle a client session (runs in separate thread)
-    void HandleSession(SOCKET clientSocket);
-    
-    // Send a message to client
-    bool SendMessage(SOCKET socket, const std::string& message);
-    
-    // Receive a message from client
-    bool ReceiveMessage(SOCKET socket, std::string& message, int timeoutMs = 30000);
-    
-    // Process CONFIG_REQUEST
-    bool ProcessConfigRequest(Session& session, const std::string& message);
-    
-    // Process RESULTS_REQUEST
-    bool ProcessResultsRequest(Session& session, const std::string& message);
-    
-    // Wait for IPEFTC server to complete and collect results
-    bool WaitForTestCompletion(Session& session);
-    
-    // Print test results for server side
-    void PrintServerResult(const TestResult& result, 
-                          long long expectedPackets, 
-                          long long expectedBytes);
-    
-    // Print accumulated results from all sessions
-    void PrintAccumulatedResults();
+  int port;
+  SOCKET listenSocket;
+  bool running;
 
-    int m_controlPort;
-    std::string m_ipeftcPath;
-    bool m_defaultSaveLogs;
-    SOCKET m_serverSocket;
-    std::atomic<bool> m_running;
-    ProcessManager m_processManager;
-    
-    // Thread management
-    std::vector<std::thread> m_sessionThreads;
-    std::mutex m_threadsMutex;
-    
-    // Accumulated test results from all sessions
-    std::vector<TestResult> m_allResults;
-    std::mutex m_resultsMutex;
+  void HandleClient(SOCKET clientSocket);
+
+  // Helper to send message
+  bool SendMessage(SOCKET socket, const Message &msg);
+  bool SendMessage(SOCKET socket, const std::string &serializedMsg);
+
+  // Helper to receive message
+  std::string ReceiveMessage(SOCKET socket);
+
+  struct SessionRecord {
+    TestResult client;
+    TestResult server;
+  };
+
+  std::vector<SessionRecord> sessionHistory;
 };
 
 } // namespace TestRunner2
-
