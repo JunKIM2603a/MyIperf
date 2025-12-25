@@ -386,6 +386,8 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
         }
 
         for (int i = 0; i < numEvents; ++i) {
+            // CAUTION: 'data' is a pointer to the SocketData managed by std::unique_ptr in socketDataMap.
+            // If the map entry is erased, this pointer becomes invalid.
             SocketData* data = static_cast<SocketData*>(events[i].data.ptr);
             if (!data) continue;
 
@@ -396,15 +398,16 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                     // Handled in EPOLLOUT check below usually, but check here too
                 } else {
                     Logger::log("Error: Epoll error or hang-up on fd: " + std::to_string(data->fd));
-                    if (data->recvCallback) data->recvCallback({}, 0); // Callback with 0 bytes
 
-                    // We need to close. But we can't remove while iterating?
-                    // We remove from epoll which stops future events.
-                    // We close FD.
+                    // Capture necessary data before potential deletion
+                    RecvCallback recvCb = data->recvCallback;
+                    ConnectCallback connectCb = data->connectCallback;
+                    AcceptCallback acceptCb = data->acceptCallback;
                     int fd = data->fd;
-                    // Invoke callbacks to signal error/close
-                    if (data->connectCallback) data->connectCallback(false);
-                    if (data->acceptCallback) data->acceptCallback(false, "", 0);
+
+                    if (recvCb) recvCb({}, 0); // Callback with 0 bytes to signal closed/error
+                    if (connectCb) connectCb(false);
+                    if (acceptCb) acceptCb(false, "", 0);
 
                     ::close(fd);
                     removeFdFromEpoll(fd);
@@ -421,23 +424,20 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                     if (connFd != -1) {
                         setNonBlocking(connFd);
 
-                        // Close previous clientFd if exists (simple single-client assumption from TestController)
-                        if (clientFd != -1 && clientFd != connFd) {
-                            // Note: TestController usually manages logic, but if we overwrite clientFd...
-                            // Actually TestController creates new connection for client mode.
-                            // In server mode, we accept one.
-                        }
                         clientFd = connFd; // Store accepted FD
 
                         auto clientData = std::make_unique<SocketData>();
                         clientData->fd = connFd;
                         clientData->operationType = LinuxOperationType::Recv;
-                        clientData->currentEvents = 0; // Don't listen yet until asyncReceive/Send called?
-                        // Wait, if we don't listen, we ignore data.
-                        // But we should follow calls.
+                        clientData->currentEvents = 0;
 
+                        // Capture callback to invoke outside lock if needed, but here it's fine.
+                        AcceptCallback acceptCb;
                         {
                             std::lock_guard<std::mutex> lock(socketDataMutex);
+                            if (socketDataMap.count(listenFd)) {
+                                acceptCb = socketDataMap[listenFd]->acceptCallback;
+                            }
                             socketDataMap[connFd] = std::move(clientData);
                         }
 
@@ -445,8 +445,8 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                         inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, INET_ADDRSTRLEN);
                         int port = ntohs(clientAddr.sin_port);
 
-                        if (data->acceptCallback) {
-                            data->acceptCallback(true, std::string(ipStr), port);
+                        if (acceptCb) {
+                            acceptCb(true, std::string(ipStr), port);
                         }
                     } else {
                          if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -466,16 +466,30 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                          error = errno;
                     }
 
-                    // Disable EPOLLOUT for now (connect finished)
-                    data->currentEvents &= ~EPOLLOUT;
-                    addFdToEpoll(data->fd, data->currentEvents, data);
+                    // Capture callback
+                    ConnectCallback connectCb = data->connectCallback;
+                    int fd = data->fd;
+
+                    // Update state inside lock
+                    {
+                         std::lock_guard<std::mutex> lock(socketDataMutex);
+                         // Re-check validity if needed
+                         if (socketDataMap.count(fd)) {
+                             auto& sd = socketDataMap[fd];
+                             sd->currentEvents &= ~EPOLLOUT;
+                             addFdToEpoll(fd, sd->currentEvents, sd.get());
+
+                             if (error == 0) {
+                                 sd->operationType = LinuxOperationType::Recv;
+                             }
+                         }
+                    }
 
                     if (error != 0) {
                         Logger::log("Error: Async connect failed: " + std::string(strerror(error)));
-                        if (data->connectCallback) data->connectCallback(false);
+                        if (connectCb) connectCb(false);
                     } else {
-                        data->operationType = LinuxOperationType::Recv;
-                        if (data->connectCallback) data->connectCallback(true);
+                        if (connectCb) connectCb(true);
                     }
                     continue;
                 }
@@ -511,14 +525,6 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                     }
                 }
 
-                // Invoke callback if we finished sending a batch (or all)
-                // The current interface implies callback per asyncSend call.
-                // Since we append to buffer, tracking which callback belongs to which data is hard
-                // if we don't have a queue of callbacks.
-                // Current implementation overwrites callback.
-                // So we call it when buffer becomes empty? Or whenever we sent something?
-                // TestController uses it to update stats or finish.
-                // "bytesSent" parameter.
                 if (totalBytesSent > 0 && callbackToCall) {
                     callbackToCall(totalBytesSent);
                 }
@@ -528,9 +534,17 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
             if (events[i].events & EPOLLIN) {
                 RecvCallback callbackToCall = nullptr;
                 std::vector<char> receivedData;
+                bool connectionClosed = false;
+                int fd = data->fd;
 
                 {
                     std::lock_guard<std::mutex> lock(socketDataMutex);
+
+                    // Double check if data is still valid in map (paranoid check)
+                    // If removeFdFromEpoll was called, we wouldn't be here, but good practice?
+                    // data pointer is from event, so it should be valid unless we removed it in previous iteration?
+                    // We only process one event per FD per iteration effectively?
+
                     // Use a temporary buffer to read
                     std::vector<char> tempBuf(65536); // 64KB read
                     int bytesRead = ::recv(data->fd, tempBuf.data(), tempBuf.size(), 0);
@@ -541,7 +555,6 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                         callbackToCall = data->recvCallback;
 
                         // Disable EPOLLIN until next asyncReceive call
-                        // This matches the "one-shot" nature of asyncReceive in this framework
                         data->currentEvents &= ~EPOLLIN;
                         addFdToEpoll(data->fd, data->currentEvents, data);
 
@@ -549,21 +562,21 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                         // Connection closed
                         Logger::log("Info: Connection closed by peer.");
                         callbackToCall = data->recvCallback;
-                        // Close socket
-                        ::close(data->fd);
-                        removeFdFromEpoll(data->fd); // This invalidates 'data' pointer if we are not careful?
-                        // removeFdFromEpoll erases from map, destroying SocketData.
-                        // So 'data' becomes invalid. We must stop accessing it.
-                        if (callbackToCall) callbackToCall({}, 0); // 0 bytes = closed
-                        continue;
+                        connectionClosed = true;
+                        // We do NOT call removeFdFromEpoll here to avoid deadlock.
+                        // We will do it outside the lock.
                     } else {
                         if (errno != EAGAIN && errno != EWOULDBLOCK) {
                             Logger::log("Error: recv failed: " + std::string(strerror(errno)));
                         }
                     }
-                }
+                } // Unlock mutex
 
-                if (callbackToCall && !receivedData.empty()) {
+                if (connectionClosed) {
+                    ::close(fd);
+                    removeFdFromEpoll(fd); // Now safe to call (it locks mutex internally)
+                    if (callbackToCall) callbackToCall({}, 0);
+                } else if (callbackToCall && !receivedData.empty()) {
                     callbackToCall(receivedData, receivedData.size());
                 }
             }
