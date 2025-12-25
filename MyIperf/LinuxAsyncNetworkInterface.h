@@ -49,6 +49,9 @@ struct SocketData {
     ConnectCallback connectCallback;
     /**< Callback function to be invoked upon completion of an accept operation. */
     AcceptCallback acceptCallback;
+
+    /**< The current events mask being monitored by epoll for this socket. */
+    uint32_t currentEvents = 0;
 };
 
 /**

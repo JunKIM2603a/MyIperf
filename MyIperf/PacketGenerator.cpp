@@ -220,7 +220,7 @@ TestStats PacketGenerator::getStats() {
 }
 
 void PacketGenerator::saveLastStats(const TestStats& Stats) {
-    memcpy_s(&m_LastStats, sizeof(TestStats), &Stats, sizeof(TestStats));
+    std::memcpy(&m_LastStats, &Stats, sizeof(TestStats));
 }
 
 TestStats PacketGenerator::lastStats() const{
