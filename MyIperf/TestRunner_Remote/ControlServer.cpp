@@ -20,6 +20,12 @@
 #define Sleep(x) usleep((x) * 1000)
 #endif
 
+#ifdef _WIN32
+#define SEND_FLAGS 0
+#else
+#define SEND_FLAGS MSG_NOSIGNAL
+#endif
+
 namespace TestRunner2 {
 
 ControlServer::ControlServer(int port)
@@ -320,11 +326,11 @@ bool ControlServer::SendMessage(SOCKET socket,
                                 const std::string &serializedMsg) {
   // 1. Send Length (Network Byte Order)
   uint32_t networkLen = htonl((uint32_t)serializedMsg.size());
-  if (send(socket, (const char *)&networkLen, 4, 0) == SOCKET_ERROR)
+  if (send(socket, (const char *)&networkLen, 4, SEND_FLAGS) == SOCKET_ERROR)
     return false;
 
   // 2. Send Data
-  if (send(socket, serializedMsg.c_str(), (int)serializedMsg.size(), 0) ==
+  if (send(socket, serializedMsg.c_str(), (int)serializedMsg.size(), SEND_FLAGS) ==
       SOCKET_ERROR)
     return false;
 

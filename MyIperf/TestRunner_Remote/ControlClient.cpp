@@ -17,6 +17,12 @@
 #define ZeroMemory(x, y) memset(x, 0, y)
 #endif
 
+#ifdef _WIN32
+#define SEND_FLAGS 0
+#else
+#define SEND_FLAGS MSG_NOSIGNAL
+#endif
+
 namespace TestRunner2 {
 
 ControlClient::ControlClient() : connectSocket(INVALID_SOCKET) {
@@ -212,11 +218,11 @@ bool ControlClient::SendMessage(const std::string &serializedMsg) {
     return false;
 
   uint32_t networkLen = htonl((uint32_t)serializedMsg.size());
-  if (send(connectSocket, (const char *)&networkLen, 4, 0) == SOCKET_ERROR)
+  if (send(connectSocket, (const char *)&networkLen, 4, SEND_FLAGS) == SOCKET_ERROR)
     return false;
 
   if (send(connectSocket, serializedMsg.c_str(), (int)serializedMsg.size(),
-           0) == SOCKET_ERROR)
+           SEND_FLAGS) == SOCKET_ERROR)
     return false;
 
   return true;

@@ -8,11 +8,12 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <signal.h>
+
 #endif
 
 namespace TestRunner2 {
@@ -78,12 +79,8 @@ bool ProcessManager::LaunchIPEFTCServer(const std::string &ipeftcPath,
   std::vector<char> cmdVec(cmdLine.begin(), cmdLine.end());
   cmdVec.push_back('\0');
 
-  if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL,
-  std::vector<char> cmdVec(cmdLine.begin(), cmdLine.end());
-  cmdVec.push_back('\0');
-
-  if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL,
-                      TRUE, 0, NULL, NULL, &si, &handles.processInfo)) {
+  if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si,
+                      &handles.processInfo)) {
     std::cerr << "CreateProcess failed (" << GetLastError()
               << "). Cmd: " << cmdLine << std::endl;
     CloseHandle(handles.stdOutRead);
@@ -206,158 +203,162 @@ ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
 bool ProcessManager::LaunchIPEFTCServer(const std::string &ipeftcPath,
                                         TestConfig config,
                                         ProcessHandles &handles) {
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        perror("pipe");
-        return false;
+  int pipefd[2];
+  if (pipe(pipefd) == -1) {
+    perror("pipe");
+    return false;
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    perror("fork");
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return false;
+  }
+
+  if (pid == 0) {                   // Child
+    close(pipefd[0]);               // Close read end
+    dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
+    dup2(pipefd[1], STDERR_FILENO); // Redirect stderr to pipe
+    close(pipefd[1]);
+
+    std::vector<std::string> args;
+    args.push_back(ipeftcPath);
+    args.push_back("--mode");
+    args.push_back("server");
+
+    if (!config.targetIP.empty()) {
+      args.push_back("--target");
+      args.push_back(config.targetIP);
     }
-
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork");
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return false;
+    if (config.port > 0) {
+      args.push_back("--port");
+      args.push_back(std::to_string(config.port));
     }
+    args.push_back("--save-logs");
+    args.push_back(config.saveLogs ? "true" : "false");
 
-    if (pid == 0) { // Child
-        close(pipefd[0]); // Close read end
-        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
-        dup2(pipefd[1], STDERR_FILENO); // Redirect stderr to pipe
-        close(pipefd[1]);
+    std::vector<char *> c_args;
+    for (auto &arg : args)
+      c_args.push_back(&arg[0]);
+    c_args.push_back(nullptr);
 
-        std::vector<std::string> args;
-        args.push_back(ipeftcPath);
-        args.push_back("--mode");
-        args.push_back("server");
-
-        if (!config.targetIP.empty()) {
-            args.push_back("--target");
-            args.push_back(config.targetIP);
-        }
-        if (config.port > 0) {
-            args.push_back("--port");
-            args.push_back(std::to_string(config.port));
-        }
-        args.push_back("--save-logs");
-        args.push_back(config.saveLogs ? "true" : "false");
-
-        std::vector<char*> c_args;
-        for (auto& arg : args) c_args.push_back(&arg[0]);
-        c_args.push_back(nullptr);
-
-        execvp(ipeftcPath.c_str(), c_args.data());
-        perror("execvp");
-        exit(1);
-    } else { // Parent
-        close(pipefd[1]); // Close write end
-        handles.pid = pid;
-        handles.pipeReadFd = pipefd[0];
-        return true;
-    }
+    execvp(ipeftcPath.c_str(), c_args.data());
+    perror("execvp");
+    exit(1);
+  } else {            // Parent
+    close(pipefd[1]); // Close write end
+    handles.pid = pid;
+    handles.pipeReadFd = pipefd[0];
+    return true;
+  }
 }
 
 bool ProcessManager::LaunchIPEFTCClient(const std::string &ipeftcPath,
                                         const TestConfig &config,
                                         ProcessHandles &handles) {
-    int pipefd[2];
-    if (pipe(pipefd) == -1) {
-        perror("pipe");
-        return false;
+  int pipefd[2];
+  if (pipe(pipefd) == -1) {
+    perror("pipe");
+    return false;
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    perror("fork");
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return false;
+  }
+
+  if (pid == 0) { // Child
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    close(pipefd[1]);
+
+    std::vector<std::string> args;
+    args.push_back(ipeftcPath);
+    args.push_back("--mode");
+    args.push_back("client");
+
+    if (!config.targetIP.empty()) {
+      args.push_back("--target");
+      args.push_back(config.targetIP);
+    }
+    if (config.port > 0) {
+      args.push_back("--port");
+      args.push_back(std::to_string(config.port));
+    }
+    if (config.packetSize > 0) {
+      args.push_back("--packet-size");
+      args.push_back(std::to_string(config.packetSize));
+    }
+    if (config.numPackets > 0) {
+      args.push_back("--num-packets");
+      args.push_back(std::to_string(config.numPackets));
+    }
+    args.push_back("--save-logs");
+    args.push_back(config.saveLogs ? "true" : "false");
+
+    if (config.sendIntervalMs > 0) {
+      args.push_back("--interval-ms");
+      args.push_back(std::to_string(config.sendIntervalMs));
     }
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        perror("fork");
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return false;
-    }
+    std::vector<char *> c_args;
+    for (auto &arg : args)
+      c_args.push_back(&arg[0]);
+    c_args.push_back(nullptr);
 
-    if (pid == 0) { // Child
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
-        close(pipefd[1]);
-
-        std::vector<std::string> args;
-        args.push_back(ipeftcPath);
-        args.push_back("--mode");
-        args.push_back("client");
-
-        if (!config.targetIP.empty()) {
-            args.push_back("--target");
-            args.push_back(config.targetIP);
-        }
-        if (config.port > 0) {
-            args.push_back("--port");
-            args.push_back(std::to_string(config.port));
-        }
-        if (config.packetSize > 0) {
-            args.push_back("--packet-size");
-            args.push_back(std::to_string(config.packetSize));
-        }
-        if (config.numPackets > 0) {
-            args.push_back("--num-packets");
-            args.push_back(std::to_string(config.numPackets));
-        }
-        args.push_back("--save-logs");
-        args.push_back(config.saveLogs ? "true" : "false");
-
-        if (config.sendIntervalMs > 0) {
-            args.push_back("--interval-ms");
-            args.push_back(std::to_string(config.sendIntervalMs));
-        }
-
-        std::vector<char*> c_args;
-        for (auto& arg : args) c_args.push_back(&arg[0]);
-        c_args.push_back(nullptr);
-
-        execvp(ipeftcPath.c_str(), c_args.data());
-        perror("execvp");
-        exit(1);
-    } else { // Parent
-        close(pipefd[1]);
-        handles.pid = pid;
-        handles.pipeReadFd = pipefd[0];
-        return true;
-    }
+    execvp(ipeftcPath.c_str(), c_args.data());
+    perror("execvp");
+    exit(1);
+  } else { // Parent
+    close(pipefd[1]);
+    handles.pid = pid;
+    handles.pipeReadFd = pipefd[0];
+    return true;
+  }
 }
 
 void ProcessManager::TerminateProcess(ProcessHandles &handles) {
-    if (handles.pid > 0) {
-        kill(handles.pid, SIGTERM);
-        waitpid(handles.pid, nullptr, 0);
-        handles.pid = -1;
-    }
-    if (handles.pipeReadFd != -1) {
-        close(handles.pipeReadFd);
-        handles.pipeReadFd = -1;
-    }
-}
-
-std::string ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
-    std::string output;
-    char buffer[4096];
-    ssize_t bytesRead;
-
-    while (true) {
-        bytesRead = read(handles.pipeReadFd, buffer, sizeof(buffer) - 1);
-        if (bytesRead <= 0) break;
-
-        buffer[bytesRead] = '\0';
-        output += buffer;
-        std::cout << buffer; // Echo
-    }
-
+  if (handles.pid > 0) {
+    kill(handles.pid, SIGTERM);
     waitpid(handles.pid, nullptr, 0);
     handles.pid = -1;
-    if (handles.pipeReadFd != -1) {
-        close(handles.pipeReadFd);
-        handles.pipeReadFd = -1;
-    }
+  }
+  if (handles.pipeReadFd != -1) {
+    close(handles.pipeReadFd);
+    handles.pipeReadFd = -1;
+  }
+}
 
-    return output;
+std::string
+ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
+  std::string output;
+  char buffer[4096];
+  ssize_t bytesRead;
+
+  while (true) {
+    bytesRead = read(handles.pipeReadFd, buffer, sizeof(buffer) - 1);
+    if (bytesRead <= 0)
+      break;
+
+    buffer[bytesRead] = '\0';
+    output += buffer;
+    std::cout << buffer; // Echo
+  }
+
+  waitpid(handles.pid, nullptr, 0);
+  handles.pid = -1;
+  if (handles.pipeReadFd != -1) {
+    close(handles.pipeReadFd);
+    handles.pipeReadFd = -1;
+  }
+
+  return output;
 }
 #endif
 
