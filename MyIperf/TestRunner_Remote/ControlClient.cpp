@@ -3,19 +3,37 @@
 #include <iostream>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <cstring>
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+#define closesocket close
+#define ZeroMemory(x, y) memset(x, 0, y)
+#endif
+
 namespace TestRunner2 {
 
 ControlClient::ControlClient() : connectSocket(INVALID_SOCKET) {
+#ifdef _WIN32
   WSADATA wsaData;
   if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
     std::cerr << "WSAStartup failed" << std::endl;
     // Consider throwing exception or handling error gracefully
   }
+#endif
 }
 
 ControlClient::~ControlClient() {
   Disconnect();
+#ifdef _WIN32
   WSACleanup();
+#endif
 }
 
 bool ControlClient::Connect(const std::string &serverIP, int port) {
@@ -193,7 +211,7 @@ bool ControlClient::SendMessage(const std::string &serializedMsg) {
   if (connectSocket == INVALID_SOCKET)
     return false;
 
-  u_long networkLen = htonl((u_long)serializedMsg.size());
+  uint32_t networkLen = htonl((uint32_t)serializedMsg.size());
   if (send(connectSocket, (const char *)&networkLen, 4, 0) == SOCKET_ERROR)
     return false;
 
@@ -208,12 +226,12 @@ std::string ControlClient::ReceiveMessage() {
   if (connectSocket == INVALID_SOCKET)
     return "";
 
-  u_long networkLen;
+  uint32_t networkLen;
   int bytesRead = recv(connectSocket, (char *)&networkLen, 4, 0);
   if (bytesRead <= 0)
     return "";
 
-  u_long len = ntohl(networkLen);
+  uint32_t len = ntohl(networkLen);
   if (len > Protocol::MAX_MESSAGE_SIZE)
     return "";
 

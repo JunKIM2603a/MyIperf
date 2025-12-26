@@ -5,27 +5,32 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#endif
+
 namespace TestRunner2 {
 
 std::string ProcessManager::GetIPEFTCPath() {
   if (!overrideIPEFTCPath.empty()) {
     return overrideIPEFTCPath;
   }
-  // Try default relative path from cmake build structure:
-  // TestRunner2/build/Release/TestRunner2.exe ->
-  // TestRunner2/../build/Release/IPEFTC.exe (This logic depends on where
-  // TestRunner is run from) Assuming standard build:
-  // build/Release/TestRunner_Remote.exe
-  // We want to find IPEFTC.exe in the same directory or specific relative path.
-  // For now, assume it's in the same directory or ../Release/IPEFTC.exe
-  return "IPEFTC.exe"; // Rely on PATH or being in same dir for simplicity, can
-                       // be overridden by args
+#ifdef _WIN32
+  return "IPEFTC.exe";
+#else
+  return "./IPEFTC";
+#endif
 }
 
 void ProcessManager::SetIPEFTCPath(const std::string &path) {
   overrideIPEFTCPath = path;
 }
 
+#ifdef _WIN32
 bool ProcessManager::CreatePipes(HANDLE &hRead, HANDLE &hWrite) {
   SECURITY_ATTRIBUTES saAttr;
   saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -187,6 +192,165 @@ ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
 
   return output;
 }
+#else
+
+bool ProcessManager::LaunchIPEFTCServer(const std::string &ipeftcPath,
+                                        TestConfig config,
+                                        ProcessHandles &handles) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+
+    if (pid == 0) { // Child
+        close(pipefd[0]); // Close read end
+        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
+        dup2(pipefd[1], STDERR_FILENO); // Redirect stderr to pipe
+        close(pipefd[1]);
+
+        std::vector<std::string> args;
+        args.push_back(ipeftcPath);
+        args.push_back("--mode");
+        args.push_back("server");
+
+        if (!config.targetIP.empty()) {
+            args.push_back("--target");
+            args.push_back(config.targetIP);
+        }
+        if (config.port > 0) {
+            args.push_back("--port");
+            args.push_back(std::to_string(config.port));
+        }
+        args.push_back("--save-logs");
+        args.push_back(config.saveLogs ? "true" : "false");
+
+        std::vector<char*> c_args;
+        for (auto& arg : args) c_args.push_back(&arg[0]);
+        c_args.push_back(nullptr);
+
+        execvp(ipeftcPath.c_str(), c_args.data());
+        perror("execvp");
+        exit(1);
+    } else { // Parent
+        close(pipefd[1]); // Close write end
+        handles.pid = pid;
+        handles.pipeReadFd = pipefd[0];
+        return true;
+    }
+}
+
+bool ProcessManager::LaunchIPEFTCClient(const std::string &ipeftcPath,
+                                        const TestConfig &config,
+                                        ProcessHandles &handles) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+
+    if (pid == 0) { // Child
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+
+        std::vector<std::string> args;
+        args.push_back(ipeftcPath);
+        args.push_back("--mode");
+        args.push_back("client");
+
+        if (!config.targetIP.empty()) {
+            args.push_back("--target");
+            args.push_back(config.targetIP);
+        }
+        if (config.port > 0) {
+            args.push_back("--port");
+            args.push_back(std::to_string(config.port));
+        }
+        if (config.packetSize > 0) {
+            args.push_back("--packet-size");
+            args.push_back(std::to_string(config.packetSize));
+        }
+        if (config.numPackets > 0) {
+            args.push_back("--num-packets");
+            args.push_back(std::to_string(config.numPackets));
+        }
+        args.push_back("--save-logs");
+        args.push_back(config.saveLogs ? "true" : "false");
+
+        if (config.sendIntervalMs > 0) {
+            args.push_back("--interval-ms");
+            args.push_back(std::to_string(config.sendIntervalMs));
+        }
+
+        std::vector<char*> c_args;
+        for (auto& arg : args) c_args.push_back(&arg[0]);
+        c_args.push_back(nullptr);
+
+        execvp(ipeftcPath.c_str(), c_args.data());
+        perror("execvp");
+        exit(1);
+    } else { // Parent
+        close(pipefd[1]);
+        handles.pid = pid;
+        handles.pipeReadFd = pipefd[0];
+        return true;
+    }
+}
+
+void ProcessManager::TerminateProcess(ProcessHandles &handles) {
+    if (handles.pid > 0) {
+        kill(handles.pid, SIGTERM);
+        waitpid(handles.pid, nullptr, 0);
+        handles.pid = -1;
+    }
+    if (handles.pipeReadFd != -1) {
+        close(handles.pipeReadFd);
+        handles.pipeReadFd = -1;
+    }
+}
+
+std::string ProcessManager::WaitForProcessAndCaptureOutput(ProcessHandles &handles) {
+    std::string output;
+    char buffer[4096];
+    ssize_t bytesRead;
+
+    while (true) {
+        bytesRead = read(handles.pipeReadFd, buffer, sizeof(buffer) - 1);
+        if (bytesRead <= 0) break;
+
+        buffer[bytesRead] = '\0';
+        output += buffer;
+        std::cout << buffer; // Echo
+    }
+
+    waitpid(handles.pid, nullptr, 0);
+    handles.pid = -1;
+    if (handles.pipeReadFd != -1) {
+        close(handles.pipeReadFd);
+        handles.pipeReadFd = -1;
+    }
+
+    return output;
+}
+#endif
 
 TestResult ProcessManager::ParseOutput(const std::string &output,
                                        const std::string &role, int port) {

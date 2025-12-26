@@ -12,6 +12,8 @@
 #else
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
 #endif
 
 // Initialize static member variables.
@@ -176,7 +178,11 @@ void Logger::start(const Config& config) {
             }
 
             // Pipe initialization
+#ifdef _WIN32
             pipeName = "\\\\.\\pipe\\myiperflog_" + mode + "_" + config.getTargetIP() + "_" + std::to_string(config.getPort());
+#else
+            pipeName = "/tmp/myiperflog_" + mode + "_" + config.getTargetIP() + "_" + std::to_string(config.getPort());
+#endif
             pipeConnected.store(false, std::memory_order_release);
 
             running.store(true, std::memory_order_release);
@@ -254,6 +260,12 @@ void Logger::stop() {
     }
     pipeThread = std::thread();
 
+#ifndef _WIN32
+    if (std::filesystem::exists(pipeName)) {
+        unlink(pipeName.c_str());
+    }
+#endif
+
     if (saveToFile.load(std::memory_order_acquire) && logStream.is_open()) {
         logStream.flush();
         logStream.close();
@@ -330,6 +342,19 @@ void Logger::logWorker() {
                 BOOL success = WriteFile((HANDLE)hPipe, formatted.c_str(), formatted.length(), &bytesWritten, NULL);
                 if (!success) {
                     pipeConnected.store(false, std::memory_order_release);
+                }
+#else
+                int fd = open(pipeName.c_str(), O_WRONLY | O_NONBLOCK);
+                if (fd != -1) {
+                    std::string payload = formatted + "\n";
+                    ssize_t written = write(fd, payload.c_str(), payload.length());
+                    close(fd);
+                    if (written == -1) {
+                         // Handling write error if necessary
+                    }
+                } else {
+                     // Could not open pipe (no reader?)
+                     // pipeConnected might remain true to keep trying, or we can check errno
                 }
 #endif
             }
@@ -444,5 +469,23 @@ void Logger::pipeWorker() {
         CloseHandle((HANDLE)hPipe);
         hPipe = INVALID_HANDLE_VALUE;
     }
+#else
+    if (mkfifo(pipeName.c_str(), 0666) == -1) {
+        if (errno != EEXIST) {
+            Logger::log("Error: Failed to create named pipe: " + pipeName);
+            return;
+        }
+    }
+
+    // On Linux, we consider the pipe "connected" once created.
+    // The writer (logWorker) will try to open it non-blocking.
+    // If a reader is attached, it will succeed.
+    pipeConnected.store(true, std::memory_order_release);
+
+    while (running.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    unlink(pipeName.c_str());
 #endif
 }

@@ -5,20 +5,39 @@
 #include <iostream>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <cstring>
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+#define closesocket close
+#define ZeroMemory(x, y) memset(x, 0, y)
+#define Sleep(x) usleep((x) * 1000)
+#endif
+
 namespace TestRunner2 {
 
 ControlServer::ControlServer(int port)
     : port(port), listenSocket(INVALID_SOCKET), running(false) {
+#ifdef _WIN32
   WSADATA wsaData;
   if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
     std::cerr << "WSAStartup failed" << std::endl;
     exit(1);
   }
+#endif
 }
 
 ControlServer::~ControlServer() {
   Stop();
+#ifdef _WIN32
   WSACleanup();
+#endif
 }
 
 void ControlServer::Start() {
@@ -42,6 +61,13 @@ void ControlServer::Start() {
     freeaddrinfo(result);
     return;
   }
+
+#ifndef _WIN32
+  int opt = 1;
+  if (setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    std::cerr << "setsockopt(SO_REUSEADDR) failed" << std::endl;
+  }
+#endif
 
   if (bind(listenSocket, result->ai_addr, (int)result->ai_addrlen) ==
       SOCKET_ERROR) {
@@ -293,7 +319,7 @@ bool ControlServer::SendMessage(SOCKET socket, const Message &msg) {
 bool ControlServer::SendMessage(SOCKET socket,
                                 const std::string &serializedMsg) {
   // 1. Send Length (Network Byte Order)
-  u_long networkLen = htonl((u_long)serializedMsg.size());
+  uint32_t networkLen = htonl((uint32_t)serializedMsg.size());
   if (send(socket, (const char *)&networkLen, 4, 0) == SOCKET_ERROR)
     return false;
 
@@ -307,12 +333,12 @@ bool ControlServer::SendMessage(SOCKET socket,
 
 std::string ControlServer::ReceiveMessage(SOCKET socket) {
   // 1. Receive Length
-  u_long networkLen;
+  uint32_t networkLen;
   int bytesRead = recv(socket, (char *)&networkLen, 4, 0);
   if (bytesRead <= 0)
     return ""; // Closed or Error
 
-  u_long len = ntohl(networkLen);
+  uint32_t len = ntohl(networkLen);
   if (len > Protocol::MAX_MESSAGE_SIZE)
     return ""; // Too big
 

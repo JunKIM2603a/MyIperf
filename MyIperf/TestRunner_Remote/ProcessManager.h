@@ -2,12 +2,18 @@
 
 #include "Message.h"
 #include <string>
+
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/types.h>
+#endif
 
 namespace TestRunner2 {
 
 // Structure to hold process handles
 struct ProcessHandles {
+#ifdef _WIN32
   PROCESS_INFORMATION processInfo;
   HANDLE stdOutRead;
   HANDLE stdOutWrite;
@@ -15,6 +21,12 @@ struct ProcessHandles {
   ProcessHandles() : stdOutRead(NULL), stdOutWrite(NULL) {
     ZeroMemory(&processInfo, sizeof(PROCESS_INFORMATION));
   }
+#else
+  pid_t pid;
+  int pipeReadFd;
+
+  ProcessHandles() : pid(-1), pipeReadFd(-1) {}
+#endif
 };
 
 class ProcessManager {
@@ -58,8 +70,10 @@ private:
   ProcessManager(const ProcessManager &) = delete;
   ProcessManager &operator=(const ProcessManager &) = delete;
 
+#ifdef _WIN32
   // Helper helper to create pipes
   bool CreatePipes(HANDLE &hRead, HANDLE &hWrite);
+#endif
 
   std::string overrideIPEFTCPath;
 };

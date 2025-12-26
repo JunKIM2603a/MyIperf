@@ -18,4 +18,6 @@ add_executable(TestRunner2 ${SOURCES})
 
 if(WIN32)
     target_link_libraries(TestRunner2 ws2_32)
+else()
+    target_link_libraries(TestRunner2 pthread)
 endif()
