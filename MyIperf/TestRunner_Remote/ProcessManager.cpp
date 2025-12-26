@@ -5,7 +5,9 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -73,7 +75,14 @@ bool ProcessManager::LaunchIPEFTCServer(const std::string &ipeftcPath,
   si.hStdOutput = handles.stdOutWrite;
   si.dwFlags |= STARTF_USESTDHANDLES;
 
-  if (!CreateProcessA(NULL, const_cast<char *>(cmdLine.c_str()), NULL, NULL,
+  std::vector<char> cmdVec(cmdLine.begin(), cmdLine.end());
+  cmdVec.push_back('\0');
+
+  if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL,
+  std::vector<char> cmdVec(cmdLine.begin(), cmdLine.end());
+  cmdVec.push_back('\0');
+
+  if (!CreateProcessA(NULL, cmdVec.data(), NULL, NULL,
                       TRUE, 0, NULL, NULL, &si, &handles.processInfo)) {
     std::cerr << "CreateProcess failed (" << GetLastError()
               << "). Cmd: " << cmdLine << std::endl;

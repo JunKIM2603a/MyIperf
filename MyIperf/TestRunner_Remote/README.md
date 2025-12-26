@@ -499,7 +499,7 @@ All 5 runs completed.
 ### 플랫폼
 
 - **Windows**: 완전 지원 (Windows Sockets 사용)
-- **Linux**: 추후 지원 예정 (POSIX 소켓으로 확장 가능)
+- **Linux**: 완전 지원 (POSIX 소켓 사용)
 
 ### 알려진 제한사항
 

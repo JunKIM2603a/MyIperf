@@ -1,0 +1,271 @@
+[2025-12-26 02:39:39] Info: Logger started 20251226_023939
+[2025-12-26 02:39:39] Info: Options => --mode CLIENT --target 127.0.0.1 --port 60000 --packet-size 8192 --num-packets 50 --interval-ms 0 --save-logs true --handshake-timeout-ms 5000 --quiet true
+[2025-12-26 02:39:39] Debug: PacketGenerator::resetStats entered.
+[2025-12-26 02:39:39] Debug: PacketGenerator::resetStats exited.
+[2025-12-26 02:39:39] Info: PacketReceiver statistics have been reset.
+[2025-12-26 02:39:39] Info: Starting test in CLIENT mode.
+[2025-12-26 02:39:39] Info: Epoll network interface initialized.
+[2025-12-26 02:39:39] Info: Transitioning to state: CONNECTING
+[2025-12-26 02:39:39] Info: Client attempting to connect to 127.0.0.1:60000
+[2025-12-26 02:39:39] Info: Epoll worker thread starting.
+[2025-12-26 02:39:39] Info: Waiting for the test to complete...
+[2025-12-26 02:39:39] Info: Client connected successfully. Starting packet receiver.
+[2025-12-26 02:39:39] Info: PacketReceiver started.
+[2025-12-26 02:39:46] Info: Transitioning to state: SENDING_CONFIG
+[2025-12-26 02:39:46] Info: Client sending configuration packet.
+[2025-12-26 02:39:46] Info: Transitioning to state: WAITING_FOR_ACK
+[2025-12-26 02:39:46] Info: Client waiting for server acknowledgment.
+[2025-12-26 02:39:46] [95mHANDSHAKE: Client entered WAITING_FOR_ACK[0m
+[2025-12-26 02:39:46] [95mHANDSHAKE: Watchdog armed for 5000 ms[0m
+[2025-12-26 02:39:46] Info: Client sent config packet successfully (182 bytes).
+[2025-12-26 02:39:46] [95mHANDSHAKE: PacketReceiver forwarding message type 1 (#0, 17 bytes)[0m
+[2025-12-26 02:39:46] Info: Client received server ACK. Starting test.
+[2025-12-26 02:39:46] [92mHANDSHAKE: Client processed CONFIG_ACK[0m
+[2025-12-26 02:39:46] Info: Transitioning to state: RUNNING_TEST
+[2025-12-26 02:39:46] Info: Handshake complete. Starting data transmission test.
+[2025-12-26 02:39:46] Debug: PacketGenerator::start entered.
+[2025-12-26 02:39:46] Info: Client test parameters - packetSize=8192, numPackets=50, intervalMs=0
+[2025-12-26 02:39:46] Info: PacketGenerator started.
+[2025-12-26 02:39:46] Debug: PacketGenerator::start exited. Thread created successfully.
+[2025-12-26 02:39:46] Debug: PacketGenerator::generatorThreadLoop started.
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 0 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 1 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 2 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 3 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 4 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 5 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 6 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 7 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 8 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 9 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 10 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 11 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 12 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 13 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 14 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 15 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 16 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 17 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 18 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 19 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 20 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 21 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 22 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 23 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 24 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 25 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 26 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 27 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 28 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 29 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 30 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 31 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 32 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 33 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 34 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 35 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 36 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 37 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 38 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 39 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 40 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 41 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 42 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 43 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 44 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 45 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 46 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 47 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 48 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator sent packet 49 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketGenerator reached target packet count: 50
+[2025-12-26 02:39:46] Info: Client generator completed.
+[2025-12-26 02:39:46] Info: Data transmission completed.
+[2025-12-26 02:39:46] Info: Transitioning to state: FINISHING
+[2025-12-26 02:39:46] Info: Initiating test completion handshake.
+[2025-12-26 02:39:46] Debug: PacketGenerator::generatorThreadLoop finished.
+[2025-12-26 02:39:46] Info: Sent TEST_FIN successfully.
+[2025-12-26 02:39:46] [95mHANDSHAKE: PacketReceiver forwarding message type 5 (#0, 17 bytes)[0m
+[2025-12-26 02:39:46] Info: Client received TEST_FIN from server. Handshake complete.
+[2025-12-26 02:39:46] Info: Transitioning to state: EXCHANGING_STATS
+[2025-12-26 02:39:46] Info: Client initiating statistics exchange.
+[2025-12-26 02:39:46] Info: Client sent STATS_EXCHANGE successfully.
+[2025-12-26 02:39:46] Info: Client Stats (sent): {"contentMismatchCount":0,"duration":0.004425912,"failedChecksumCount":0,"sequenceErrorCount":0,"throughputMbps":695.9451520952066,"totalBytesReceived":0,"totalBytesSent":385024,"totalPacketsReceived":0,"totalPacketsSent":14}
+[2025-12-26 02:39:46] [95mHANDSHAKE: PacketReceiver forwarding message type 4 (#0, 243 bytes)[0m
+[2025-12-26 02:39:46] Info: Client received STATS_ACK. Preparing for server-to-client test.
+[2025-12-26 02:39:46] --- Test Phase 1 Summary ---
+[2025-12-26 02:39:46] Client-side (sent):
+    - Total Bytes Sent:     385024
+    - Total Packets Sent:   14
+    - Total Bytes Received: 0
+    - Total Packets Received: 0
+    - Duration:             0.00 s
+    - Throughput:           695.95 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] Server-side (received):
+    - Total Bytes Sent:     0
+    - Total Packets Sent:   0
+    - Total Bytes Received: 409600
+    - Total Packets Received: 50
+    - Duration:             0.01 s
+    - Throughput:           495.77 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] ----------------------------
+[2025-12-26 02:39:46] Info: Transitioning to state: WAITING_FOR_SERVER_FIN
+[2025-12-26 02:39:46] Info: Client waiting for server to finish sending data.
+[2025-12-26 02:39:46] Info: PacketReceiver statistics have been reset.
+[2025-12-26 02:39:46] Info: Client sent CLIENT_READY.
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 0 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 1 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 2 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 3 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 4 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 5 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 6 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 7 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 8 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 9 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 10 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 11 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 12 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 13 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 14 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 15 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 16 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 17 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 18 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 19 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 20 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 21 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 22 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 23 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 24 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 25 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 26 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 27 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 28 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 29 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 30 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 31 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 32 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 33 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 34 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 35 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 36 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 37 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 38 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 39 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 40 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 41 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 42 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 43 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 44 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 45 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 46 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 47 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 48 (size: 8192 bytes)
+[2025-12-26 02:39:46] Info: PacketReceiver received DATA_PACKET 49 (size: 8192 bytes)
+[2025-12-26 02:39:46] [95mHANDSHAKE: PacketReceiver forwarding message type 5 (#0, 17 bytes)[0m
+[2025-12-26 02:39:46] Info: Client received TEST_FIN from server, concluding server-to-client test.
+[2025-12-26 02:39:46] Info: Transitioning to state: EXCHANGING_SERVER_STATS
+[2025-12-26 02:39:46] Info: Client waiting for final stats from server.
+[2025-12-26 02:39:46] Info: Client Stats (Phase 2): {"contentMismatchCount":0,"duration":0.047925937,"failedChecksumCount":0,"sequenceErrorCount":0,"throughputMbps":68.37216349051245,"totalBytesReceived":409600,"totalBytesSent":0,"totalPacketsReceived":50,"totalPacketsSent":0}
+[2025-12-26 02:39:46] Info: Client sent STATS_EXCHANGE for server-to-client test.
+[2025-12-26 02:39:46] [95mHANDSHAKE: PacketReceiver forwarding message type 4 (#0, 242 bytes)[0m
+[2025-12-26 02:39:46] Info: Client received final STATS_ACK from server.
+[2025-12-26 02:39:46] --- Test Phase 2 Summary ---
+[2025-12-26 02:39:46] Server-side (sent):
+    - Total Bytes Sent:     409600
+    - Total Packets Sent:   41
+    - Total Bytes Received: 0
+    - Total Packets Received: 0
+    - Duration:             0.00 s
+    - Throughput:           731.17 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] Client-side (received):
+    - Total Bytes Sent:     0
+    - Total Packets Sent:   0
+    - Total Bytes Received: 409600
+    - Total Packets Received: 50
+    - Duration:             0.05 s
+    - Throughput:           68.37 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] ----------------------------
+[2025-12-26 02:39:46] Info: Client sent final SHUTDOWN_ACK.
+[2025-12-26 02:39:46] Info: Transitioning to state: FINISHED
+[2025-12-26 02:39:46] Info: Test finished successfully. Shutting down.
+[2025-12-26 02:39:46]
+=============== FINAL TEST SUMMARY ===============
+[2025-12-26 02:39:46]
+--- Phase 1: Client to Server ---
+[2025-12-26 02:39:46] Client Sent:
+    - Total Bytes Sent:     385024
+    - Total Packets Sent:   14
+    - Total Bytes Received: 0
+    - Total Packets Received: 0
+    - Duration:             0.00 s
+    - Throughput:           695.95 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] Server Received:
+    - Total Bytes Sent:     0
+    - Total Packets Sent:   0
+    - Total Bytes Received: 409600
+    - Total Packets Received: 50
+    - Duration:             0.01 s
+    - Throughput:           495.77 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46]
+--- Phase 2: Server to Client ---
+[2025-12-26 02:39:46] Server Sent:
+    - Total Bytes Sent:     409600
+    - Total Packets Sent:   41
+    - Total Bytes Received: 0
+    - Total Packets Received: 0
+    - Duration:             0.00 s
+    - Throughput:           731.17 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] Client Received:
+    - Total Bytes Sent:     0
+    - Total Packets Sent:   0
+    - Total Bytes Received: 409600
+    - Total Packets Received: 50
+    - Duration:             0.05 s
+    - Throughput:           68.37 Mbps
+    - Sequence Errors:      0
+    - Failed Checksums:     0
+    - Content Mismatches:   0
+[2025-12-26 02:39:46] ================================================
+
+[2025-12-26 02:39:46] Debug: TestController::stopTest() called.
+[2025-12-26 02:39:46] Info: Stopping the test components.
+[2025-12-26 02:39:46] Debug: Calling packetGenerator->stop().
+[2025-12-26 02:39:46] Debug: PacketGenerator::stop entered.
+[2025-12-26 02:39:46] Debug: PacketGenerator was already stopped.
+[2025-12-26 02:39:46] Debug: Joining generator thread...
+[2025-12-26 02:39:46] Debug: Generator thread joined successfully.
+[2025-12-26 02:39:46] Info: PacketGenerator stopped.
+[2025-12-26 02:39:46] Debug: PacketGenerator::stop exited.
+[2025-12-26 02:39:46] Debug: packetGenerator->stop() completed.
+[2025-12-26 02:39:46] Debug: Calling packetReceiver->stop().
+[2025-12-26 02:39:46] Info: PacketReceiver stopped.
+[2025-12-26 02:39:46] Debug: packetReceiver->stop() completed.
+[2025-12-26 02:39:46] Debug: Calling networkInterface->close().
+[2025-12-26 02:39:47] Info: Epoll worker thread stopping.
+[2025-12-26 02:39:47] Info: Network interface closed.
+[2025-12-26 02:39:47] Debug: networkInterface->close() completed.
+[2025-12-26 02:39:47] Debug: TestController::stopTest() finished.
+[2025-12-26 02:39:47] Info: IPEFTC application finished.
