@@ -1,4 +1,5 @@
-﻿#include "TestController.h"
+#include "TestController.h"
+#include "NetworkAwaiters.h" // Awaiters for network operations
 #include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
@@ -134,6 +135,14 @@ void TestController::reset() {
         packetReceiver->resetStats();
     }
     
+    {
+        std::lock_guard<std::mutex> lock(m_awaiterMutex);
+        m_waitingCoroutines.clear();
+        m_messageBuffer.clear(); // Clear buffered messages
+    }
+    m_generatorCompletionAwaiter = nullptr;
+    m_receiverCompletionAwaiter = nullptr;
+
     // Re-create the promise for the next test run
     testCompletionPromise = std::promise<void>();
 }
@@ -160,34 +169,9 @@ void TestController::startTest(const Config& config) {
     logMessage += " mode.";
     Logger::log(logMessage);
 
-    if (config.getMode() == Config::TestMode::SERVER) {
-        if (!networkInterface->initialize(config.getTargetIP(), config.getPort())) {
-            Logger::log("Error: Server network interface initialization failed.");
-            transitionTo(State::ERRORED);
-            return;
-        }
-        // Setup the listening socket before trying to accept connections.
-#ifdef _WIN32
-        WinIOCPNetworkInterface* winInterface = static_cast<WinIOCPNetworkInterface*>(networkInterface.get());
-        if (!winInterface->setupListeningSocket(config.getTargetIP(), config.getPort())) {
-            if (WSAGetLastError() == WSAEADDRINUSE) {
-                Logger::log("Error: Failed to set up listening socket. The port " + std::to_string(config.getPort()) + " is already in use.");
-            } else {
-                Logger::log("Error: Failed to set up listening socket.");
-            }
-            transitionTo(State::ERRORED);
-            return;
-        }
-#endif
-        transitionTo(State::ACCEPTING);
-    } else { // Client mode
-        if (!networkInterface->initialize("0.0.0.0", 0)) { // Client binds to any available port.
-            Logger::log("Error: Client network interface initialization failed.");
-            transitionTo(State::ERRORED);
-            return;
-        }
-        transitionTo(State::CONNECTING);
-    }
+    // Start the main coroutine
+    mainTestTask = runTestCoroutine();
+    mainTestTask.start();
 }
 
 
@@ -202,6 +186,22 @@ void TestController::stopTest() {
         return; // Already stopped
     }
     Logger::log("Info: Stopping the test components.");
+
+    // Resume any waiting coroutines to let them exit/fail
+    {
+        std::lock_guard<std::mutex> lock(m_awaiterMutex);
+        for (auto& [type, awaiter] : m_waitingCoroutines) {
+             if (awaiter && awaiter->handle && !awaiter->handle.done()) {
+                 awaiter->cancelled = true;
+                 awaiter->handle.resume(); // Resume them, they should check running state
+             }
+        }
+        m_waitingCoroutines.clear();
+    }
+
+    if (m_generatorCompletionAwaiter) m_generatorCompletionAwaiter->resume();
+    if (m_receiverCompletionAwaiter) m_receiverCompletionAwaiter->resume();
+
     Logger::log("Debug: Calling packetGenerator->stop().");
     packetGenerator->stop();
     Logger::log("Debug: packetGenerator->stop() completed.");
@@ -212,6 +212,17 @@ void TestController::stopTest() {
     networkInterface->close();
     Logger::log("Debug: networkInterface->close() completed.");
     Logger::log("Debug: TestController::stopTest() finished.");
+
+    if (!testCompletionPromise_set) {
+        testCompletionPromise.set_value();
+        testCompletionPromise_set = true;
+    }
+    // Notify CLIHandler to unblock
+    {
+        std::lock_guard<std::mutex> lock(m_cliBlockMutex);
+        m_cliBlockFlag = true;
+    }
+    m_cliBlockCv.notify_all();
 }
 
 /**
@@ -232,253 +243,7 @@ void TestController::transitionTo(State newState) {
 void TestController::transitionTo_nolock(State newState) {
     currentState = newState;
     Logger::log("Info: Transitioning to state: " + std::string(stateToString(newState)));
-    switch (newState) {
-        case State::CONNECTING: {
-            Logger::log("Info: Client attempting to connect to " + currentConfig.getTargetIP() + ":" + std::to_string(currentConfig.getPort()));
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            networkInterface->asyncConnect(currentConfig.getTargetIP(), currentConfig.getPort(), [this](bool success) {
-                if (success) {
-                    Logger::log("Info: Client connected successfully. Starting packet receiver.");
-                    packetReceiver->start(
-                        [this](const PacketHeader& header, const std::vector<char>& payload) {
-                            onPacket(header, payload);
-                        },
-                        [this]() {
-                            Logger::log("Info: Client receiver completed (server disconnected). Finishing test.");
-                            if (currentState != State::FINISHED && currentState != State::ERRORED) {
-                                transitionTo(State::FINISHED);
-                            }
-                        }
-                    );
-                    transitionTo(State::SENDING_CONFIG);
-                } else {
-                    Logger::log("Error: Client failed to connect to the server.");
-                    transitionTo(State::ERRORED);
-                }
-            });
-            break;
-        }
-        case State::ACCEPTING: {
-            Logger::log("Info: Server waiting for a client connection on " + currentConfig.getTargetIP() + ":" + std::to_string(currentConfig.getPort()));
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            networkInterface->asyncAccept([this](bool success, const std::string& clientIP, int clientPort) {
-                if (success) {
-                    Logger::log("Info: Server accepted a client from " + clientIP + ":" + std::to_string(clientPort));
-                    // Start receiver immediately to handle config handshake
-                    packetReceiver->start(
-                        [this](const PacketHeader& header, const std::vector<char>& payload) {
-                            onPacket(header, payload);
-                        },
-                        [this]() {
-                            Logger::log("Info: Server receiver completed (client disconnected). Finishing test.");
-                            transitionTo(State::FINISHED);
-                        }
-                    );
-                    transitionTo(State::WAITING_FOR_CONFIG);
-                } else {
-                    Logger::log("Error: Server failed to accept a client connection.");
-                    transitionTo(State::ERRORED);
-                }
-            });
-            break;
-        }
-        case State::SENDING_CONFIG: {
-            Logger::log("Info: Client sending configuration packet.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            std::string configStr = currentConfig.toJson().dump();
-            std::vector<char> configData(configStr.begin(), configStr.end());
-
-            PacketHeader header{};
-            header.startCode = PROTOCOL_START_CODE;
-            header.messageType = MessageType::CONFIG_HANDSHAKE;
-            header.payloadSize = static_cast<uint32_t>(configData.size());
-            header.checksum = calculateChecksum(configData.data(), configData.size());
-
-            std::vector<char> packet(sizeof(PacketHeader) + configData.size());
-            std::memcpy(packet.data(), &header, sizeof(PacketHeader));
-            std::memcpy(packet.data() + sizeof(PacketHeader), configData.data(), configData.size());
-
-            // Critical fix: Transition state BEFORE sending to prevent race condition
-            // where server's CONFIG_ACK arrives before asyncSend callback executes
-            transitionTo_nolock(State::WAITING_FOR_ACK);
-
-            networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                if (bytesSent > 0) {
-                    Logger::log("Info: Client sent config packet successfully (" + std::to_string(bytesSent) + " bytes).");
-                    // State transition already completed above
-                } else {
-                    Logger::log("Error: Client failed to send config packet.");
-                    transitionTo_nolock(State::ERRORED);
-                }
-            });
-            break;
-        }
-        case State::WAITING_FOR_ACK: {
-            Logger::log("Info: Client waiting for server acknowledgment.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            Logger::log("\x1b[95mHANDSHAKE: Client entered WAITING_FOR_ACK\x1b[0m");
-            startHandshakeWatchdog();
-            break;
-        }
-        case State::WAITING_FOR_CONFIG: {
-            Logger::log("Info: Server waiting for client configuration packet.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            break;
-        }
-        case State::RUNNING_TEST: {
-            Logger::log("Info: Handshake complete. Starting data transmission test.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            m_testStartTime = std::chrono::steady_clock::now();
-            if (currentConfig.getMode() == Config::TestMode::CLIENT) {
-                packetGenerator->start(currentConfig, [this]() {
-                    Logger::log("Info: Client generator completed.");
-                    onTestCompleted();
-                });
-            } else { // SERVER
-                // Reset stats here to only measure the data transfer phase
-                packetReceiver->resetStats();
-            }
-            break;
-        }
-        case State::FINISHING: {
-            Logger::log("Info: Initiating test completion handshake.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-
-            PacketHeader header{};
-            header.startCode = PROTOCOL_START_CODE;
-            header.messageType = MessageType::TEST_FIN;
-            header.payloadSize = 0;
-            header.checksum = 0;
-
-            std::vector<char> packet(sizeof(PacketHeader));
-            std::memcpy(packet.data(), &header, sizeof(PacketHeader));
-
-            networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                if (bytesSent > 0) {
-                    Logger::log("Info: Sent TEST_FIN successfully.");
-                } else {
-                    Logger::log("Error: Failed to send TEST_FIN.");
-                    transitionTo_nolock(State::ERRORED);
-                }
-            });
-            break;
-        }
-        case State::SERVER_TEST_FINISHING: {
-            Logger::log("Info: Server finishing server-to-client test.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-
-            PacketHeader header{};
-            header.startCode = PROTOCOL_START_CODE;
-            header.messageType = MessageType::TEST_FIN;
-            header.payloadSize = 0;
-            header.checksum = 0;
-
-            std::vector<char> packet(sizeof(PacketHeader));
-            std::memcpy(packet.data(), &header, sizeof(PacketHeader));
-
-            networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                if (bytesSent > 0) {
-                    Logger::log("Info: Server sent TEST_FIN for server-to-client test.");
-                    // Now server waits for the client to send its stats
-                } else {
-                    Logger::log("Error: Failed to send TEST_FIN for server-to-client test.");
-                    transitionTo_nolock(State::ERRORED);
-                }
-            });
-            break;
-        }
-        case State::EXCHANGING_STATS: {
-            Logger::log("Info: Client initiating statistics exchange.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            sendClientStatsAndAwaitAck();
-            break;
-        }
-        case State::WAITING_FOR_CLIENT_READY: {
-            Logger::log("Info: Server waiting for client to be ready for phase 2.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            break;
-        }
-        case State::RUNNING_SERVER_TEST: {
-            Logger::log("Info: Server starting data transmission to client.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            m_testStartTime = std::chrono::steady_clock::now();
-            // Server is already configured to send from the previous state
-            break;
-        }
-        case State::WAITING_FOR_SERVER_FIN: {
-            Logger::log("Info: Client waiting for server to finish sending data.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            // Client resets its receiver stats to measure the server-to-client test
-            packetReceiver->resetStats();
-            break;
-        }
-        case State::EXCHANGING_SERVER_STATS: {
-            Logger::log("Info: Client waiting for final stats from server.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            break;
-        }
-        case State::WAITING_FOR_SHUTDOWN_ACK: {
-            Logger::log("Info: Server waiting for client's final shutdown acknowledgment.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            break;
-        }
-        case State::FINISHED: {
-            Logger::log("Info: Test finished successfully. Shutting down.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-
-            Logger::log("\n=============== FINAL TEST SUMMARY ===============");
-            Logger::log("\n--- Phase 1: Client to Server ---");
-            Logger::log("Client Sent:" + formatStatsForLogging(m_clientStatsPhase1));
-            Logger::log("Server Received:" + formatStatsForLogging(m_serverStatsPhase1));
-            Logger::log("\n--- Phase 2: Server to Client ---");
-            Logger::log("Server Sent:" + formatStatsForLogging(m_serverStatsPhase2));
-            Logger::log("Client Received:" + formatStatsForLogging(m_clientStatsPhase2));
-            Logger::log("================================================\n");
-
-            if (!testCompletionPromise_set) {
-                testCompletionPromise.set_value();
-                testCompletionPromise_set = true;
-            }
-            // Notify CLIHandler to unblock
-            {
-                std::lock_guard<std::mutex> lock(m_cliBlockMutex);
-                m_cliBlockFlag = true;
-            }
-            m_cliBlockCv.notify_all();
-            break;
-        }
-        case State::ERRORED: {
-            Logger::log("Error: An unrecoverable error occurred. Shutting down.");
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            if (currentConfig.getMode() == Config::TestMode::CLIENT) {
-                TestStats localStats = packetGenerator->getStats();
-                Logger::writeFinalReport("CLIENT", localStats, m_remoteStats);
-            } else { // SERVER
-                TestStats localStats = packetReceiver->getStats();
-                Logger::writeFinalReport("SERVER", localStats, m_remoteStats);
-            }
-            // The call to stopTest() is removed from here to prevent deadlocks.
-            // The worker thread, which calls this transition, cannot join itself.
-            // The main thread, after being unblocked by the promise, is now responsible
-            // for calling stopTest() to clean up resources.
-            // stopTest();
-            if (!testCompletionPromise_set) {
-                testCompletionPromise.set_value();
-                testCompletionPromise_set = true;
-            }
-            // Notify CLIHandler to unblock
-            {
-                std::lock_guard<std::mutex> lock(m_cliBlockMutex);
-                m_cliBlockFlag = true;
-            }
-            m_cliBlockCv.notify_all();
-            break;
-        }
-        default:
-            Logger::log("Warning: Unhandled state transition: " + std::string(stateToString(newState)));
-            DebugPause(string_format("[%s:%d] State::%s",  __FUNCTION__, __LINE__,stateToString(newState)));
-            break;
-}
+    // Legacy switch statement removed - logic is now in runTestCoroutine
 }
 
 /**
@@ -487,309 +252,26 @@ void TestController::transitionTo_nolock(State newState) {
  * @param payload The packet payload.
  */
 void TestController::onPacket(const PacketHeader& header, const std::vector<char>& payload) {
-    std::lock_guard<std::mutex> lock(m_stateMachineMutex);
+    if (header.messageType == MessageType::DATA_PACKET) {
+        return; // Data packets are handled by PacketReceiver stats, ignored here
+    }
 
-    if (currentConfig.getMode() == Config::TestMode::SERVER) {
-        switch (header.messageType) {
-            case MessageType::CONFIG_HANDSHAKE:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::WAITING_FOR_CONFIG) {
-                    Logger::log("Info: Server received config packet.");
-                    try {
-                        std::string configStr(payload.begin(), payload.end());
-                        Config receivedConfig = Config::fromJson(nlohmann::json::parse(configStr));
-                        receivedConfig.setMode(Config::TestMode::SERVER); // Ensure mode is server
-                        this->currentConfig = receivedConfig;
-
-                        PacketHeader ackHeader{};
-                        ackHeader.startCode = PROTOCOL_START_CODE;
-                        ackHeader.messageType = MessageType::CONFIG_ACK;
-                        std::vector<char> ackPacket(sizeof(PacketHeader));
-                        memcpy(ackPacket.data(), &ackHeader, sizeof(PacketHeader));
-
-                        // Critical fix: Transition state BEFORE sending to prevent race condition
-                        // where client's DATA_PACKET arrives before server is ready
-                        transitionTo_nolock(State::RUNNING_TEST);
-
-                        networkInterface->asyncSend(ackPacket, [this](size_t bytesSent) {
-                            if (bytesSent > 0) {
-                                Logger::log("Info: Server sent config ACK.");
-                                Logger::log("\x1b[95mHANDSHAKE: Client CONFIG_ACK dispatched\x1b[0m");
-                                // State transition already completed above
-                            } else {
-                                Logger::log("Error: Server failed to send config ACK.");
-                                transitionTo_nolock(State::ERRORED);
-                            }
-                        });
-                    } catch (const std::exception& e) {
-                        Logger::log("Error: Failed to process config packet: " + std::string(e.what()));
-                        transitionTo_nolock(State::ERRORED);
-                    }
-                }
-                break;
-            case MessageType::CLIENT_READY:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::WAITING_FOR_CLIENT_READY) {
-                    Logger::log("Info: Server received CLIENT_READY. Starting server-to-client test.");
-                    packetGenerator->resetStats();
-                    packetGenerator->start(currentConfig, [this]() {
-                        Logger::log("Info: Server generator completed sending data.");
-                        onTestCompleted();
-                    });
-                    transitionTo_nolock(State::RUNNING_SERVER_TEST);
-                }
-                break;
-            case MessageType::TEST_FIN:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::RUNNING_TEST) {
-                    Logger::log("Info: Server received TEST_FIN from client. Replying and finishing.");
-                    transitionTo_nolock(State::FINISHING);
-                }
-                break;
-            case MessageType::SHUTDOWN_ACK:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::WAITING_FOR_SHUTDOWN_ACK) {
-                    Logger::log("Info: Server received final shutdown ACK from client.");
-                    transitionTo_nolock(State::FINISHED);
-                }
-                break;
-            case MessageType::STATS_EXCHANGE: {
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::FINISHING) {
-                    Logger::log("Info: Server received STATS_EXCHANGE from client.");
-                    try {
-                        nlohmann::json client_stats_payload = parseStats(payload);
-                        m_clientStatsPhase1 = client_stats_payload.get<TestStats>();
-                        m_serverStatsPhase1 = packetReceiver->getStats();
-
-                        Logger::log("--- Test Phase 1 Summary ---");
-                        Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
-                        Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
-                        Logger::log("----------------------------");
-
-                    } catch (const std::exception& e) {
-                        Logger::log("Warning: Could not process phase 1 client stats: " + std::string(e.what()));
-                    }
-
-                    // Send server stats back to client in the ACK
-                    nlohmann::json ack_payload = m_serverStatsPhase1;
-                    std::string ack_payload_str = ack_payload.dump();
-                    std::vector<char> payload_data(ack_payload_str.begin(), ack_payload_str.end());
-
-                    PacketHeader ackHeader{};
-                    ackHeader.startCode = PROTOCOL_START_CODE;
-                    ackHeader.messageType = MessageType::STATS_ACK;
-                    ackHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
-                    ackHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
-
-                    std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
-                    std::memcpy(packet.data(), &ackHeader, sizeof(PacketHeader));
-                    if (!payload_data.empty()) {
-                        std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
-                    }
-
-                    // Transition before the async send to prevent a race condition where the client's
-                    // CLIENT_READY arrives before the server has transitioned to WAITING_FOR_CLIENT_READY.
-                    transitionTo_nolock(State::WAITING_FOR_CLIENT_READY);
-                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                        if (bytesSent > 0) {
-                            Logger::log("Info: Server sent STATS_ACK with its stats.");
-                        } else {
-                            Logger::log("Error: Server failed to send STATS_ACK.");
-                            transitionTo_nolock(State::ERRORED);
-                        }
-                    });
-                } else if (currentState == State::SERVER_TEST_FINISHING) {
-                    Logger::log("Info: Server received STATS_EXCHANGE from client for server-to-client test.");
-                    try {
-                        nlohmann::json client_stats_payload = parseStats(payload);
-                        m_clientStatsPhase2 = client_stats_payload.get<TestStats>();
-                        m_serverStatsPhase2 = packetGenerator->getStats();
-
-                        Logger::log("--- Test Phase 2 Summary ---");
-                        Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
-                        Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
-                        Logger::log("----------------------------");
-
-                    } catch (const std::exception& e) {
-                        Logger::log("Warning: Could not process phase 2 client stats: " + std::string(e.what()));
-                    }
-
-                    // Send server's generator stats back to client
-                    nlohmann::json ack_payload = m_serverStatsPhase2;
-                    std::string ack_payload_str = ack_payload.dump();
-                    std::vector<char> payload_data(ack_payload_str.begin(), ack_payload_str.end());
-
-                    PacketHeader ackHeader{};
-                    ackHeader.startCode = PROTOCOL_START_CODE;
-                    ackHeader.messageType = MessageType::STATS_ACK;
-                    ackHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
-                    ackHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
-
-                    std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
-                    std::memcpy(packet.data(), &ackHeader, sizeof(PacketHeader));
-                    if (!payload_data.empty()) {
-                        std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
-                    }
-
-                    // Critical fix: Transition state BEFORE asyncSend to prevent race condition
-                    // This matches the pattern used in Phase 1 and ensures consistent behavior
-                    transitionTo_nolock(State::WAITING_FOR_SHUTDOWN_ACK);
-
-                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                        if (bytesSent > 0) {
-                            Logger::log("Info: Server sent final STATS_ACK with its generator stats.");
-                            // State transition already completed above
-                        } else {
-                            Logger::log("Error: Server failed to send final STATS_ACK.");
-                            transitionTo_nolock(State::ERRORED);
-                        }
-                    });
-                } else {
-                    Logger::log("Warning: Received STATS_EXCHANGE in unexpected state: " + std::string(stateToString(currentState)));
-                }
-                break;
-            }
-            default:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                break;
+    std::lock_guard<std::mutex> lock(m_awaiterMutex);
+    auto it = m_waitingCoroutines.find(header.messageType);
+    if (it != m_waitingCoroutines.end() && it->second) {
+        // Found a coroutine waiting for this message type
+        it->second->header = header;
+        it->second->payload = payload;
+        it->second->completed = true;
+        if (it->second->handle && !it->second->handle.done()) {
+            it->second->handle.resume();
         }
-    } else { // CLIENT
-        switch (header.messageType) {
-            case MessageType::CONFIG_ACK:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::WAITING_FOR_ACK) {
-                    Logger::log("Info: Client received server ACK. Starting test.");
-                    Logger::log("\x1b[92mHANDSHAKE: Client processed CONFIG_ACK\x1b[0m");
-                    cancelHandshakeWatchdog();
-                    transitionTo_nolock(State::RUNNING_TEST);
-                }
-                break;
-            case MessageType::TEST_FIN:
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                if (currentState == State::FINISHING) {
-                    Logger::log("Info: Client received TEST_FIN from server. Handshake complete.");
-                    transitionTo_nolock(State::EXCHANGING_STATS);
-                } else if (currentState == State::WAITING_FOR_SERVER_FIN) {
-                    Logger::log("Info: Client received TEST_FIN from server, concluding server-to-client test.");
-                    TestStats clientReceiverStats = packetReceiver->getStats();
-                    m_clientStatsPhase2 = clientReceiverStats; // Store the stats
-
-                    nlohmann::json stats_payload = clientReceiverStats;
-                    std::string payload_str = stats_payload.dump();
-                    std::vector<char> payload_data(payload_str.begin(), payload_str.end());
-
-                    PacketHeader statsHeader{};
-                    statsHeader.startCode = PROTOCOL_START_CODE;
-                    statsHeader.messageType = MessageType::STATS_EXCHANGE;
-                    statsHeader.payloadSize = static_cast<uint32_t>(payload_data.size());
-                    statsHeader.checksum = calculateChecksum(payload_data.data(), payload_data.size());
-
-                    std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
-                    std::memcpy(packet.data(), &statsHeader, sizeof(PacketHeader));
-                    if (!payload_data.empty()) {
-                        std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
-                    }
-
-                    // Critical fix: Transition state BEFORE sending to prevent race condition
-                    // where server's STATS_ACK arrives before asyncSend callback executes
-                    transitionTo_nolock(State::EXCHANGING_SERVER_STATS);
-                    Logger::log("Info: Client Stats (Phase 2): " + payload_str);
-
-                    networkInterface->asyncSend(packet, [this](size_t bytesSent) {
-                        if (bytesSent > 0) {
-                            Logger::log("Info: Client sent STATS_EXCHANGE for server-to-client test.");
-                            // State transition already completed above
-                        } else {
-                            Logger::log("Error: Client failed to send STATS_EXCHANGE for server-to-client test.");
-                            transitionTo_nolock(State::ERRORED);
-                        }
-                    });
-                }
-                break;
-            case MessageType::STATS_ACK:
-                if (currentState == State::EXCHANGING_STATS) {
-                    Logger::log("Info: Client received STATS_ACK. Preparing for server-to-client test.");
-                    try {
-                        nlohmann::json server_stats_payload = parseStats(payload);
-                        m_serverStatsPhase1 = server_stats_payload.get<TestStats>();
-                        m_clientStatsPhase1 = packetGenerator->lastStats();
-
-                        Logger::log("--- Test Phase 1 Summary ---");
-                        Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
-                        Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
-                        Logger::log("----------------------------");
-
-                    } catch (const std::exception& e) {
-                        Logger::log("Warning: Could not process phase 1 server stats: " + std::string(e.what()));
-                    }
-
-                    // Signal server that client is ready for the next phase
-                    PacketHeader readyHeader{};
-                    readyHeader.startCode = PROTOCOL_START_CODE;
-                    readyHeader.messageType = MessageType::CLIENT_READY;
-                    std::vector<char> readyPacket(sizeof(PacketHeader));
-                    memcpy(readyPacket.data(), &readyHeader, sizeof(PacketHeader));
-
-                    // Critical fix: Transition state BEFORE sending to prevent race condition
-                    // where server's TEST_FIN arrives before client is ready to receive it
-                    transitionTo_nolock(State::WAITING_FOR_SERVER_FIN);
-
-                    networkInterface->asyncSend(readyPacket, [this](size_t bytesSent) {
-                        if (bytesSent > 0) {
-                            Logger::log("Info: Client sent CLIENT_READY.");
-                            // State transition already completed above
-                        } else {
-                            Logger::log("Error: Client failed to send CLIENT_READY.");
-                            transitionTo_nolock(State::ERRORED);
-                        }
-                    });
-                } else if (currentState == State::EXCHANGING_SERVER_STATS) {
-                    Logger::log("Info: Client received final STATS_ACK from server.");
-                    try {
-                        nlohmann::json server_stats_payload = parseStats(payload);
-                        m_serverStatsPhase2 = server_stats_payload.get<TestStats>();
-
-                        Logger::log("--- Test Phase 2 Summary ---");
-                        Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
-                        Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
-                        Logger::log("----------------------------");
-
-                    } catch (const std::exception& e) {
-                        Logger::log("Warning: Could not parse final server stats: " + std::string(e.what()));
-                    }
-                    
-                    // Graceful shutdown: send final ACK to server
-                    PacketHeader shutdownHeader{};
-                    shutdownHeader.startCode = PROTOCOL_START_CODE;
-                    shutdownHeader.messageType = MessageType::SHUTDOWN_ACK;
-                    std::vector<char> shutdownPacket(sizeof(PacketHeader));
-                    memcpy(shutdownPacket.data(), &shutdownHeader, sizeof(PacketHeader));
-
-                    networkInterface->asyncSend(shutdownPacket, [this](size_t bytesSent) {
-                        if (bytesSent > 0) {
-                            Logger::log("Info: Client sent final SHUTDOWN_ACK.");
-                        } else {
-                            Logger::log("Warning: Client failed to send final SHUTDOWN_ACK.");
-                        }
-                        // In either case, the client's job is done.
-                        transitionTo_nolock(State::FINISHED);
-                    });
-                } else {
-                    // Unexpected STATS_ACK in wrong state - helps diagnose race conditions
-                    Logger::log("Warning: Client received STATS_ACK in unexpected state: " 
-                                + std::string(stateToString(currentState)));
-                }
-                break;
-            case MessageType::DATA_PACKET:
-                // Data packets are handled by the PacketReceiver for statistical purposes.
-                // The TestController's state machine does not need to act on them, so we simply ignore them.
-                break;
-            default:
-                Logger::log("Warning: Client received an unexpected message type: " + std::to_string((int)header.messageType));
-                DebugPause(string_format("[%s:%d] MessageType::%s", __FUNCTION__, __LINE__, MessageTypeToString(header.messageType)));
-                break;
-        }
+        // Remove from map, the awaiter is now complete
+        m_waitingCoroutines.erase(it);
+    } else {
+        // No coroutine waiting yet, buffer it!
+        // Logger::log("Debug: Buffering control packet: " + std::string(MessageTypeToString(header.messageType)));
+        m_messageBuffer[header.messageType].push({header, payload});
     }
 }
 
@@ -799,90 +281,14 @@ void TestController::onPacket(const PacketHeader& header, const std::vector<char
  */
 void TestController::onTestCompleted() {
     Logger::log("Info: Data transmission completed.");
-    if (currentConfig.getMode() == Config::TestMode::CLIENT) {
-        // Client finished sending data in the first phase.
-        transitionTo(State::FINISHING);
-    } else { // SERVER
-        // Server finished sending data in the second phase.
-        transitionTo(State::SERVER_TEST_FINISHING);
+    if (m_generatorCompletionAwaiter) {
+        m_generatorCompletionAwaiter->completed = true;
+        m_generatorCompletionAwaiter->resume();
     }
-}
-
-/**
- * @brief Sends client-side statistics to the server and waits for acknowledgment.
- *
- * This function is called on the client side after the main data transfer is complete.
- * It sends a final statistics packet to the server and then waits for a corresponding
- * acknowledgment from the server to ensure the stats were received.
- */
-void TestController::sendClientStatsAndAwaitAck() {
-    using json = nlohmann::json;
-    TestStats clientStats = packetGenerator->getStats();
-    packetGenerator->saveLastStats(clientStats);
-    json stats_payload = clientStats; // Use the to_json function implicitly
-    std::string payload_str = stats_payload.dump();
-
-    std::vector<char> payload_data(payload_str.begin(), payload_str.end());
-
-    PacketHeader header{};
-    header.startCode = PROTOCOL_START_CODE;
-    header.messageType = MessageType::STATS_EXCHANGE;
-    header.payloadSize = static_cast<uint32_t>(payload_data.size());
-    header.checksum = calculateChecksum(payload_data.data(), payload_data.size());
-
-    std::vector<char> packet(sizeof(PacketHeader) + payload_data.size());
-    std::memcpy(packet.data(), &header, sizeof(PacketHeader));
-    if (!payload_data.empty()) {
-        std::memcpy(packet.data() + sizeof(PacketHeader), payload_data.data(), payload_data.size());
-    }
-
-    networkInterface->asyncSend(packet, [this, payload_data](size_t bytesSent) {
-        if (bytesSent > 0) {
-            Logger::log("Info: Client sent STATS_EXCHANGE successfully.");
-            nlohmann::json stats_payload = parseStats(payload_data);
-            Logger::log("Info: Client Stats (sent): " + stats_payload.dump());
-            // Now we wait for STATS_ACK in onPacket
-        } else {
-            Logger::log("Error: Client failed to send STATS_EXCHANGE.");
-            transitionTo(State::ERRORED);
-        }
-    });
 }
 
 void TestController::startHandshakeWatchdog() {
-    if (currentConfig.getMode() != Config::TestMode::CLIENT) {
-        return;
-    }
-
-    cancelHandshakeWatchdog();
-
-    const int timeoutMs = currentConfig.getHandshakeTimeoutMs();
-    {
-        std::lock_guard<std::mutex> lock(m_handshakeWatchdogMutex);
-        m_handshakeWatchdogCancel = false;
-    }
-
-    m_handshakeWatchdogArmed = true;
-    Logger::log("\x1b[95mHANDSHAKE: Watchdog armed for " + std::to_string(timeoutMs) + " ms\x1b[0m");
-
-    m_handshakeWatchdog = std::thread([this, timeoutMs]() {
-        std::unique_lock<std::mutex> lock(m_handshakeWatchdogMutex);
-        bool cancelled = m_handshakeWatchdogCv.wait_for(
-            lock,
-            std::chrono::milliseconds(timeoutMs),
-            [this]() { return m_handshakeWatchdogCancel; });
-        lock.unlock();
-
-        if (cancelled) {
-            m_handshakeWatchdogArmed = false;
-            return;
-        }
-
-        m_handshakeWatchdogArmed = false;
-        Logger::log("\x1b[91mHANDSHAKE: Timed out waiting for CONFIG_ACK after "
-                    + std::to_string(timeoutMs) + " ms\x1b[0m");
-        transitionTo(State::ERRORED);
-    });
+    // Replaced by coroutine logic or can remain as auxiliary safety
 }
 
 void TestController::cancelHandshakeWatchdog() {
@@ -908,4 +314,393 @@ void TestController::cancelHandshakeWatchdog() {
 
 void TestController::cancelTimer() {
     // No-op placeholder for now
+}
+
+// --- Coroutine Implementation ---
+
+auto TestController::waitForMessage(MessageType type, int timeoutMs) {
+    struct Awaiter : public MessageAwaiter {
+        TestController* controller;
+        int timeout;
+        std::thread timerThread;
+        std::atomic<bool> cancelledTimer{false};
+
+        Awaiter(TestController* c, MessageType t, int to) : controller(c), timeout(to) {
+            this->type = t;
+        }
+
+        ~Awaiter() {
+            cancelledTimer = true;
+            if (timerThread.joinable()) timerThread.join();
+        }
+
+        bool await_ready() {
+            // Check buffer first!
+            std::lock_guard<std::mutex> lock(controller->m_awaiterMutex);
+            auto& queue = controller->m_messageBuffer[type];
+            if (!queue.empty()) {
+                auto& msg = queue.front();
+                this->header = msg.header;
+                this->payload = msg.payload;
+                this->completed = true;
+                queue.pop();
+                return true; // Resume immediately
+            }
+            return false;
+        }
+
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            {
+                std::lock_guard<std::mutex> lock(controller->m_awaiterMutex);
+                controller->m_waitingCoroutines[type] = this;
+            }
+
+            // Start timeout timer
+            if (timeout > 0) {
+                 // Capture local copy of type to avoid issues if 'this' is accessed after destruction (though thread should join first)
+                 MessageType capturedType = this->type;
+                 timerThread = std::thread([this, h, capturedType]() {
+                     // Non-blocking wait loop
+                     auto start = std::chrono::steady_clock::now();
+                     while (!cancelledTimer) {
+                         auto now = std::chrono::steady_clock::now();
+                         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() >= timeout) {
+                             // Timeout occurred
+                             std::lock_guard<std::mutex> lock(controller->m_awaiterMutex);
+                             // If still in map, it means not yet received
+                             auto it = controller->m_waitingCoroutines.find(capturedType);
+                             if (it != controller->m_waitingCoroutines.end() && it->second == this) {
+                                 this->timedOut = true;
+                                 this->completed = true; // Mark as done (via timeout)
+                                 controller->m_waitingCoroutines.erase(it);
+                                 if (!h.done()) h.resume();
+                             }
+                             break;
+                         }
+                         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                     }
+                 });
+            }
+        }
+
+        std::pair<PacketHeader, std::vector<char>> await_resume() {
+             if (cancelled) {
+                 throw std::runtime_error("Operation cancelled.");
+             }
+             if (timedOut) {
+                 throw std::runtime_error("Timeout waiting for message: " + std::string(MessageTypeToString(type)));
+             }
+             return {header, payload};
+        }
+    };
+    return Awaiter(this, type, timeoutMs);
+}
+
+auto TestController::waitForGenerator() {
+    struct Awaiter : public CompletionAwaiter {
+        TestController* controller;
+        Awaiter(TestController* c) : controller(c) {}
+        bool await_ready() { return false; }
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            controller->m_generatorCompletionAwaiter = this;
+        }
+        void await_resume() {
+            controller->m_generatorCompletionAwaiter = nullptr;
+        }
+    };
+    return Awaiter(this);
+}
+
+// Simple helper to send a control packet
+Task sendControlPacket(NetworkInterface* net, MessageType type, const std::vector<char>& payload = {}) {
+    PacketHeader header{};
+    header.startCode = PROTOCOL_START_CODE;
+    header.messageType = type;
+    header.payloadSize = static_cast<uint32_t>(payload.size());
+    header.checksum = calculateChecksum(payload.data(), payload.size()); // Assuming calculateChecksum handles empty data gracefully or we pass nullptr
+
+    std::vector<char> packet(sizeof(PacketHeader) + payload.size());
+    std::memcpy(packet.data(), &header, sizeof(PacketHeader));
+    if (!payload.empty()) {
+        std::memcpy(packet.data() + sizeof(PacketHeader), payload.data(), payload.size());
+    }
+
+    co_await co_send(net, packet);
+}
+
+Task TestController::runTestCoroutine() {
+    Logger::log("Coroutine: Starting test coroutine.");
+
+    try {
+        if (currentConfig.getMode() == Config::TestMode::CLIENT) {
+            co_await runClientLogic();
+        } else {
+            co_await runServerLogic();
+        }
+    } catch (const std::exception& e) {
+        Logger::log(std::string("Coroutine Error: ") + e.what());
+        transitionTo(State::ERRORED);
+    }
+
+    // Cleanup and Signal Finish
+    if (!testCompletionPromise_set) {
+        testCompletionPromise.set_value();
+        testCompletionPromise_set = true;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_cliBlockMutex);
+        m_cliBlockFlag = true;
+    }
+    m_cliBlockCv.notify_all();
+
+    Logger::log("Coroutine: Test coroutine finished.");
+}
+
+Task TestController::runClientLogic() {
+    Logger::log("Coroutine: Running Client Logic");
+    auto* net = networkInterface.get();
+
+    // 1. Connect
+    transitionTo(State::CONNECTING);
+    if (!net->initialize("0.0.0.0", 0)) { // Bind client
+        Logger::log("Error: Client init failed");
+        transitionTo(State::ERRORED);
+        co_return;
+    }
+
+    bool connected = co_await co_connect(net, currentConfig.getTargetIP(), currentConfig.getPort());
+    if (!connected) {
+        Logger::log("Error: Failed to connect to server");
+        transitionTo(State::ERRORED);
+        co_return;
+    }
+    Logger::log("Info: Client connected.");
+
+    // Start Receiver (for control packets)
+    packetReceiver->start([this](const PacketHeader& h, const std::vector<char>& p) {
+        onPacket(h, p);
+    }, [this]() {
+        Logger::log("Info: Client receiver stopped (server disconnected).");
+    });
+
+    // 2. Send Config (Handshake)
+    transitionTo(State::SENDING_CONFIG);
+    std::string configStr = currentConfig.toJson().dump();
+    std::vector<char> configData(configStr.begin(), configStr.end());
+
+    // Explicit send to manage transition properly
+    co_await sendControlPacket(net, MessageType::CONFIG_HANDSHAKE, configData);
+
+    // 3. Wait for ACK
+    transitionTo(State::WAITING_FOR_ACK);
+    // Timeout set to configured value
+    auto [ackHeader, ackPayload] = co_await waitForMessage(MessageType::CONFIG_ACK, currentConfig.getHandshakeTimeoutMs());
+    Logger::log("Info: Received CONFIG_ACK.");
+
+    // 4. Run Test (Client -> Server)
+    transitionTo(State::RUNNING_TEST);
+    m_testStartTime = std::chrono::steady_clock::now();
+    packetGenerator->start(currentConfig, [this]() {
+        onTestCompleted();
+    });
+
+    // Wait for generator to finish
+    co_await waitForGenerator();
+    Logger::log("Info: Client generator finished.");
+
+    // 5. Send FIN
+    transitionTo(State::FINISHING);
+    co_await sendControlPacket(net, MessageType::TEST_FIN);
+    Logger::log("Info: Sent TEST_FIN.");
+
+    // 6. Exchange Stats (Phase 1)
+    transitionTo(State::EXCHANGING_STATS);
+
+    auto [finHeader, finPayload] = co_await waitForMessage(MessageType::TEST_FIN);
+    Logger::log("Info: Received TEST_FIN from server.");
+
+    transitionTo(State::EXCHANGING_STATS);
+
+    // Send Stats
+    TestStats clientStats = packetGenerator->getStats();
+    packetGenerator->saveLastStats(clientStats);
+    std::string statsStr = nlohmann::json(clientStats).dump();
+    std::vector<char> statsData(statsStr.begin(), statsStr.end());
+
+    co_await sendControlPacket(net, MessageType::STATS_EXCHANGE, statsData);
+    Logger::log("Info: Sent STATS_EXCHANGE.");
+
+    // Wait for STATS_ACK (containing server stats)
+    auto [statsAckHeader, statsAckPayload] = co_await waitForMessage(MessageType::STATS_ACK);
+    Logger::log("Info: Received STATS_ACK.");
+
+    m_serverStatsPhase1 = parseStats(statsAckPayload).get<TestStats>();
+    m_clientStatsPhase1 = packetGenerator->lastStats();
+
+    Logger::log("--- Test Phase 1 Summary ---");
+    Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
+    Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
+    Logger::log("----------------------------");
+
+    // 7. Prepare for Phase 2 (Server -> Client)
+    // Send CLIENT_READY
+    co_await sendControlPacket(net, MessageType::CLIENT_READY);
+    transitionTo(State::WAITING_FOR_SERVER_FIN);
+
+    // Reset receiver stats for Phase 2
+    packetReceiver->resetStats();
+
+    // 8. Wait for Server to Finish Phase 2
+    auto [serverFinHeader, serverFinPayload] = co_await waitForMessage(MessageType::TEST_FIN);
+    Logger::log("Info: Received TEST_FIN for Phase 2.");
+
+    // 9. Exchange Stats (Phase 2)
+    transitionTo(State::EXCHANGING_SERVER_STATS);
+    TestStats clientReceiverStats = packetReceiver->getStats();
+    m_clientStatsPhase2 = clientReceiverStats;
+
+    std::string stats2Str = nlohmann::json(clientReceiverStats).dump();
+    std::vector<char> stats2Data(stats2Str.begin(), stats2Str.end());
+
+    co_await sendControlPacket(net, MessageType::STATS_EXCHANGE, stats2Data);
+
+    // Wait for final STATS_ACK
+    auto [finalAckHeader, finalAckPayload] = co_await waitForMessage(MessageType::STATS_ACK);
+    m_serverStatsPhase2 = parseStats(finalAckPayload).get<TestStats>();
+
+    Logger::log("--- Test Phase 2 Summary ---");
+    Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
+    Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
+    Logger::log("----------------------------");
+
+    // 10. Send Shutdown ACK
+    co_await sendControlPacket(net, MessageType::SHUTDOWN_ACK);
+
+    transitionTo(State::FINISHED);
+}
+
+Task TestController::runServerLogic() {
+    Logger::log("Coroutine: Running Server Logic");
+    auto* net = networkInterface.get();
+
+    // 1. Initialize and Accept
+    if (!net->initialize(currentConfig.getTargetIP(), currentConfig.getPort())) {
+         Logger::log("Error: Server init failed");
+         transitionTo(State::ERRORED);
+         co_return;
+    }
+
+    // Setup listening socket (Windows specific logic handled inside impl if needed, but here we invoke setup via initialize or setupListeningSocket if needed)
+    #ifdef _WIN32
+    WinIOCPNetworkInterface* winInterface = static_cast<WinIOCPNetworkInterface*>(networkInterface.get());
+    if (!winInterface->setupListeningSocket(currentConfig.getTargetIP(), currentConfig.getPort())) {
+        Logger::log("Error: Failed to setup listening socket");
+        transitionTo(State::ERRORED);
+        co_return;
+    }
+    #endif
+
+    transitionTo(State::ACCEPTING);
+    auto acceptRes = co_await co_accept(net);
+    if (!acceptRes.success) {
+        Logger::log("Error: Accept failed");
+        transitionTo(State::ERRORED);
+        co_return;
+    }
+    Logger::log("Info: Client connected from " + acceptRes.clientIP);
+
+    // Start Receiver
+    packetReceiver->start([this](const PacketHeader& h, const std::vector<char>& p) {
+        onPacket(h, p);
+    }, [this]() {
+        Logger::log("Info: Server receiver stopped.");
+    });
+
+    // 2. Wait for Config
+    transitionTo(State::WAITING_FOR_CONFIG);
+    auto [configHeader, configPayload] = co_await waitForMessage(MessageType::CONFIG_HANDSHAKE);
+
+    std::string configStr(configPayload.begin(), configPayload.end());
+    Config receivedConfig = Config::fromJson(nlohmann::json::parse(configStr));
+    receivedConfig.setMode(Config::TestMode::SERVER);
+    this->currentConfig = receivedConfig;
+    Logger::log("Info: Received Config.");
+
+    // 3. Send ACK
+    co_await sendControlPacket(net, MessageType::CONFIG_ACK);
+    Logger::log("Info: Sent CONFIG_ACK.");
+
+    // 4. Run Test (Client -> Server)
+    transitionTo(State::RUNNING_TEST);
+    packetReceiver->resetStats();
+
+    // Wait for Client to send FIN
+    auto [finHeader, finPayload] = co_await waitForMessage(MessageType::TEST_FIN);
+    Logger::log("Info: Received TEST_FIN.");
+
+    // 5. Send FIN
+    transitionTo(State::FINISHING);
+    co_await sendControlPacket(net, MessageType::TEST_FIN);
+
+    // 6. Wait for Stats (Phase 1)
+    auto [statsHeader, statsPayload] = co_await waitForMessage(MessageType::STATS_EXCHANGE);
+    m_clientStatsPhase1 = parseStats(statsPayload).get<TestStats>();
+    m_serverStatsPhase1 = packetReceiver->getStats();
+
+    Logger::log("--- Test Phase 1 Summary ---");
+    Logger::log("Client-side (sent):" + formatStatsForLogging(m_clientStatsPhase1));
+    Logger::log("Server-side (received):" + formatStatsForLogging(m_serverStatsPhase1));
+    Logger::log("----------------------------");
+
+    // Send ACK with server stats
+    nlohmann::json ackJson = m_serverStatsPhase1;
+    std::string ackStr = ackJson.dump();
+    std::vector<char> ackData(ackStr.begin(), ackStr.end());
+
+    transitionTo(State::WAITING_FOR_CLIENT_READY);
+    co_await sendControlPacket(net, MessageType::STATS_ACK, ackData);
+
+    // 7. Wait for Client Ready for Phase 2
+    auto [readyHeader, readyPayload] = co_await waitForMessage(MessageType::CLIENT_READY);
+    Logger::log("Info: Received CLIENT_READY. Starting Phase 2.");
+
+    // 8. Run Test Phase 2 (Server -> Client)
+    transitionTo(State::RUNNING_SERVER_TEST);
+    packetGenerator->resetStats();
+    packetGenerator->start(currentConfig, [this]() {
+        onTestCompleted();
+    });
+
+    co_await waitForGenerator();
+    Logger::log("Info: Server generator finished.");
+
+    // 9. Send FIN (Phase 2)
+    transitionTo(State::SERVER_TEST_FINISHING);
+    co_await sendControlPacket(net, MessageType::TEST_FIN);
+
+    // 10. Wait for Stats (Phase 2)
+    auto [stats2Header, stats2Payload] = co_await waitForMessage(MessageType::STATS_EXCHANGE);
+    m_clientStatsPhase2 = parseStats(stats2Payload).get<TestStats>();
+    m_serverStatsPhase2 = packetGenerator->getStats();
+
+    Logger::log("--- Test Phase 2 Summary ---");
+    Logger::log("Server-side (sent):" + formatStatsForLogging(m_serverStatsPhase2));
+    Logger::log("Client-side (received):" + formatStatsForLogging(m_clientStatsPhase2));
+    Logger::log("----------------------------");
+
+    // Send Final ACK with stats
+    nlohmann::json finalAckJson = m_serverStatsPhase2;
+    std::string finalAckStr = finalAckJson.dump();
+    std::vector<char> finalAckData(finalAckStr.begin(), finalAckStr.end());
+
+    transitionTo(State::WAITING_FOR_SHUTDOWN_ACK);
+    co_await sendControlPacket(net, MessageType::STATS_ACK, finalAckData);
+
+    // 11. Wait for Shutdown ACK
+    auto [shutdownHeader, shutdownPayload] = co_await waitForMessage(MessageType::SHUTDOWN_ACK);
+    Logger::log("Info: Received SHUTDOWN_ACK.");
+
+    transitionTo(State::FINISHED);
 }

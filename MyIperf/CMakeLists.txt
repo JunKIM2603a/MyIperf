@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.15)
 # Define the project name and supported languages.
 project(IPEFTC LANGUAGES CXX)
 
-# Set the C++ standard to C++17 and ensure it's required.
-set(CMAKE_CXX_STANDARD 17)
+# Set the C++ standard to C++20 and ensure it's required.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 

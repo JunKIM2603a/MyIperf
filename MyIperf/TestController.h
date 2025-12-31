@@ -1,16 +1,19 @@
-﻿#pragma once
+#pragma once
 
 #include "Config.h"
 #include "NetworkInterface.h"
 #include "PacketGenerator.h"
 #include "PacketReceiver.h"
 #include "Logger.h"
+#include "CoroutineSupport.h" // Include custom coroutine support
 #include <memory>
 #include <chrono>
 #include <future>
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <map>
+#include <queue> // Added for message queue
 
 /**
  * @class TestController
@@ -94,7 +97,7 @@ private:
     /** @brief The packet receiver for processing incoming packets. */
     std::unique_ptr<PacketReceiver> packetReceiver;
     
-    // --- State Machine and Synchronization ---
+    // --- State Management ---
     /** @brief The current state of the test. */
     std::atomic<State> currentState;
     /** @brief Mutex to protect the state machine logic. */
@@ -136,6 +139,42 @@ private:
     std::mutex m_handshakeWatchdogMutex;
     std::condition_variable m_handshakeWatchdogCv;
     bool m_handshakeWatchdogCancel{false};
+
+    // --- Coroutine Support ---
+    Task mainTestTask{nullptr}; // Holds the handle to the main coroutine
+
+    struct MessageAwaiter {
+        MessageType type;
+        std::coroutine_handle<> handle;
+        std::vector<char> payload;
+        PacketHeader header;
+        // Timeout support
+        bool timedOut = false;
+        // Result availability (if completed synchronously from buffer)
+        bool completed = false;
+        // Cancellation flag
+        bool cancelled = false;
+    };
+
+    struct QueuedMessage {
+        PacketHeader header;
+        std::vector<char> payload;
+    };
+
+    // Maps MessageType to a waiting coroutine handle
+    std::mutex m_awaiterMutex;
+    std::map<MessageType, MessageAwaiter*> m_waitingCoroutines;
+    // Buffered messages: Map Type -> Queue of messages (handled FIFO)
+    std::map<MessageType, std::queue<QueuedMessage>> m_messageBuffer;
+
+    // Awaiter specifically for Generator/Receiver completion
+    struct CompletionAwaiter {
+        std::coroutine_handle<> handle;
+        bool completed = false;
+        void resume() { if (handle && !handle.done()) handle.resume(); }
+    };
+    CompletionAwaiter* m_generatorCompletionAwaiter = nullptr;
+    CompletionAwaiter* m_receiverCompletionAwaiter = nullptr;
 
 
     /**
@@ -184,4 +223,14 @@ private:
      * @brief Cancels any outstanding state timers (no-op placeholder).
      */
     void cancelTimer();
+
+    // New Coroutine Logic
+    Task runTestCoroutine();
+    Task runClientLogic();
+    Task runServerLogic();
+
+    // Coroutine Awaiters
+    auto waitForMessage(MessageType type, int timeoutMs = 5000); // Added timeout
+    auto waitForGenerator();
+    auto waitForReceiver(); // Waits for disconnect or completion
 };
