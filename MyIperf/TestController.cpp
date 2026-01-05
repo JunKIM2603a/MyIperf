@@ -1,5 +1,5 @@
 #include "TestController.h"
-#include "NetworkAwaiters.h" // Awaiters for network operations
+// #include "NetworkAwaiters.h" // Removed, integrated into NetworkInterface.h
 #include "Protocol.h" // For TestStats and json serialization
 #include "ConfigParser.h"
 #ifdef _WIN32
@@ -358,7 +358,6 @@ auto TestController::waitForMessage(MessageType type, int timeoutMs) {
 
             // Start timeout timer
             if (timeout > 0) {
-                 // Capture local copy of type to avoid issues if 'this' is accessed after destruction (though thread should join first)
                  MessageType capturedType = this->type;
                  timerThread = std::thread([this, h, capturedType]() {
                      // Non-blocking wait loop
@@ -427,7 +426,7 @@ Task sendControlPacket(NetworkInterface* net, MessageType type, const std::vecto
         std::memcpy(packet.data() + sizeof(PacketHeader), payload.data(), payload.size());
     }
 
-    co_await co_send(net, packet);
+    co_await net->send(packet);
 }
 
 Task TestController::runTestCoroutine() {
@@ -470,7 +469,7 @@ Task TestController::runClientLogic() {
         co_return;
     }
 
-    bool connected = co_await co_connect(net, currentConfig.getTargetIP(), currentConfig.getPort());
+    bool connected = co_await net->connect(currentConfig.getTargetIP(), currentConfig.getPort());
     if (!connected) {
         Logger::log("Error: Failed to connect to server");
         transitionTo(State::ERRORED);
@@ -603,7 +602,7 @@ Task TestController::runServerLogic() {
     #endif
 
     transitionTo(State::ACCEPTING);
-    auto acceptRes = co_await co_accept(net);
+    auto acceptRes = co_await net->accept();
     if (!acceptRes.success) {
         Logger::log("Error: Accept failed");
         transitionTo(State::ERRORED);

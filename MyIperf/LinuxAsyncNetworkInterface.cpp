@@ -189,7 +189,7 @@ void LinuxAsyncNetworkInterface::asyncConnect(const std::string& ip, int port, C
     inet_pton(AF_INET, ip.c_str(), &serverAddr.sin_addr);
     serverAddr.sin_port = htons(port);
 
-    int res = connect(clientFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
+    int res = ::connect(clientFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
     if (res == 0) {
         // Immediate connection
         auto clientData = std::make_unique<SocketData>();
@@ -420,7 +420,7 @@ void LinuxAsyncNetworkInterface::epollWorkerThread() {
                 if (events[i].events & EPOLLIN) {
                     sockaddr_in clientAddr;
                     socklen_t clientLen = sizeof(clientAddr);
-                    int connFd = accept(listenFd, (struct sockaddr*)&clientAddr, &clientLen);
+                    int connFd = ::accept(listenFd, (struct sockaddr*)&clientAddr, &clientLen);
                     if (connFd != -1) {
                         setNonBlocking(connFd);
 

@@ -1,4 +1,4 @@
-﻿#include "PacketReceiver.h"
+#include "PacketReceiver.h"
 #include "Logger.h"
 #include "Protocol.h"
 #include <iostream>
@@ -10,6 +10,10 @@
  */
 PacketReceiver::PacketReceiver(NetworkInterface* netInterface)
     : networkInterface(netInterface), running(false), currentBytesReceived(0), expectedPacketCounter(0) {}
+
+PacketReceiver::~PacketReceiver() {
+    stop();
+}
 
 /**
  * @brief Starts the packet receiving process.
@@ -40,11 +44,13 @@ void PacketReceiver::start(PacketCallback onPacket, ReceiverCompletionCallback o
     m_startTime = std::chrono::steady_clock::now();
     // packetBufferSize = 8192; // A reasonable default buffer size, e.g., 8KB.
     // packetBufferSize = 13'000'000;
-    packetBufferSize = 1'000'000'000;
+    packetBufferSize = 1'000'000'000; // Using large buffer as per previous code
 
     Logger::log("Info: PacketReceiver started.");
-    // Start the first asynchronous receive operation.
-    receiveNextPacket();
+
+    // Start the receiver coroutine loop
+    receiverTask = receiverLoop();
+    receiverTask.start();
 }
 
 /**
@@ -56,6 +62,7 @@ void PacketReceiver::stop() {
         return; // Already stopped.
     }
     Logger::log("Info: PacketReceiver stopped.");
+    // receiverTask will naturally complete or be cleaned up
 }
 
 /**
@@ -103,47 +110,36 @@ void PacketReceiver::resetStats() {
 }
 
 /**
- * @brief Initiates an asynchronous receive operation.
- * If the receiver is running, it requests the network interface to receive data.
+ * @brief The coroutine loop for receiving data.
  */
-void PacketReceiver::receiveNextPacket() {
-#ifdef DEBUG_LOG
-    Logger::log("Debug: PacketReceiver::receiveNextPacket called.");
-#endif
-    if (!running) {
-        return;
-    }
-    // Asynchronously receive data. The callback `onPacketReceived` will be invoked upon completion.
-    networkInterface->asyncReceive(packetBufferSize, [this](const std::vector<char>& data, size_t bytesReceived) {
-        onPacketReceived(data, bytesReceived);
-    });
-}
+Task PacketReceiver::receiverLoop() {
+    while (running) {
+        try {
+            // Asynchronously receive data.
+            // We use the coroutine wrapper 'receive' from NetworkInterface
+            auto result = co_await networkInterface->receive(packetBufferSize);
 
-/**
- * @brief Callback function that is executed when data is received from the network.
- * @param data The buffer containing the received data.
- * @param bytesReceived The number of bytes received.
- */
-void PacketReceiver::onPacketReceived(const std::vector<char>& data, size_t bytesReceived) {
-    if (!running) return;
-
-    if (bytesReceived > 0) {
-#ifdef DEBUG_LOG
-        Logger::log("Debug: onPacketReceived - bytesReceived=" + std::to_string(bytesReceived));
-#endif
-        // Append the newly received data to our internal buffer.
-        m_receiveBuffer.insert(m_receiveBuffer.end(), data.begin(), data.begin() + bytesReceived);
-        processBuffer();
-        // Immediately post the next receive request.
-        receiveNextPacket();
-    } else {
-        // A zero-byte receive is a special condition that typically indicates the peer has gracefully
-        // closed the connection from their side.
-        Logger::log("Warning: 0 bytes received. The connection may have been closed.");
-        // Process any data that might be lingering in the buffer before stopping.
-        processBuffer();
-        stop(); 
-        if (onCompleteCallback) onCompleteCallback();
+            if (result.bytesReceived > 0) {
+                // Append the newly received data to our internal buffer.
+                m_receiveBuffer.insert(m_receiveBuffer.end(), result.data.begin(), result.data.begin() + result.bytesReceived);
+                processBuffer();
+            } else {
+                // A zero-byte receive is a special condition that typically indicates the peer has gracefully
+                // closed the connection from their side.
+                Logger::log("Warning: 0 bytes received. The connection may have been closed.");
+                // Process any data that might be lingering in the buffer before stopping.
+                processBuffer();
+                stop();
+                if (onCompleteCallback) onCompleteCallback();
+                break;
+            }
+        } catch (const std::exception& e) {
+            // Handle any exceptions from the network layer
+            Logger::log("Error in receiver loop: " + std::string(e.what()));
+            stop();
+            if (onCompleteCallback) onCompleteCallback();
+            break;
+        }
     }
 }
 

@@ -1,8 +1,9 @@
-﻿#pragma once
+#pragma once
 
 #include "NetworkInterface.h"
 #include "Protocol.h"
 #include "Config.h"
+#include "CoroutineSupport.h" // For Task
 #include <chrono>
 #include <vector>
 #include <atomic>
@@ -40,7 +41,7 @@ public:
     /**
      * @brief Destroys the PacketReceiver object.
      */
-    ~PacketReceiver() {};
+    ~PacketReceiver();
 
     /**
      * @brief Starts the packet receiving process.
@@ -76,16 +77,9 @@ private:
     // Private methods for internal operation
 
     /**
-     * @brief Initiates an asynchronous receive operation on the network interface.
+     * @brief The coroutine loop for receiving data.
      */
-    void receiveNextPacket();
-
-    /**
-     * @brief The callback handler for when data is received from the network interface.
-     * @param data The raw data received.
-     * @param bytesReceived The number of bytes received.
-     */
-    void onPacketReceived(const std::vector<char>& data, size_t bytesReceived);
+    Task receiverLoop();
 
     /**
      * @brief Processes the internal buffer to find and validate complete packets.
@@ -117,6 +111,9 @@ private:
     ReceiverCompletionCallback onCompleteCallback;
     /**< Counter to track the sequence of incoming packets. */
     uint32_t expectedPacketCounter;
+
+    /**< The handle to the receiver task */
+    Task receiverTask{nullptr};
 
     // --- Statistics Counters ---
     /**< Total number of valid packets received. */
