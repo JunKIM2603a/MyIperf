@@ -1,118 +1,137 @@
-# Set the minimum required version of CMake.
-# This resolves potential policy errors and ensures modern CMake features.
 cmake_minimum_required(VERSION 3.15)
 
-# Define the project name and supported languages.
 project(IPEFTC LANGUAGES CXX)
 
-# Set the C++ standard to C++20 and ensure it's required.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(MYIPERF_ENABLE_DEBUG_LOGS "Enable verbose Debug: log lines" OFF)
 
+set(MYIPERF_OUTPUT_BIN_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+set(MYIPERF_OUTPUT_LIB_DIR "${CMAKE_BINARY_DIR}/lib/$<CONFIG>")
 
-# --- nlohmann/json library setup ---
-# Prefer a local version if available, otherwise fetch from GitHub.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nlohmann/json.hpp")
-    message(STATUS "Found local nlohmann/json.hpp")
-    # Create an INTERFACE library for the local header-only library.
-    # This makes linking consistent regardless of where the library comes from.
-    add_library(nlohmann_json INTERFACE)
-    target_include_directories(nlohmann_json INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-else()
-    message(STATUS "Local nlohmann/json.hpp not found. Fetching from GitHub.")
-    include(FetchContent)
-    FetchContent_Declare(
-        nlohmann_json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG v3.11.3 # Use a specific stable tag for reproducibility
-    )
-    # This makes the 'nlohmann_json' target available.
-    FetchContent_MakeAvailable(nlohmann_json)
-endif()
-
-# Define common source files that are always part of the build.
-set(COMMON_SOURCE_FILES
-    CLIHandler.cpp
-    Config.cpp
-    ConfigParser.cpp
-    Logger.cpp
-    main.cpp
-    PacketGenerator.cpp
-    PacketReceiver.cpp
-    TestController.cpp
+add_library(nlohmann_json INTERFACE)
+target_include_directories(nlohmann_json INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
 )
 
-# Define common header files (for organization and IDE support).
-set(COMMON_HEADER_FILES
-    CLIHandler.h
-    Config.h
-    ConfigParser.h
-    Logger.h
-    NetworkInterface.h
-    Protocol.h # Added missing protocol header
-    PacketGenerator.h
-    PacketReceiver.h
-    TestController.h
+set(MYIPERF_CORE_PUBLIC_HEADERS
+    include/myiperf/Config.h
+    include/myiperf/ConfigParser.h
+    include/myiperf/CoroutineSupport.h
+    include/myiperf/Logger.h
+    include/myiperf/NetworkInterface.h
+    include/myiperf/Protocol.h
+    include/myiperf/TestController.h
 )
 
-# Add platform-specific source files based on the operating system.
+set(MYIPERF_CORE_PRIVATE_HEADERS
+    src/myiperf/ClientTestSession.h
+    src/myiperf/ControlChannel.h
+    src/myiperf/ControlMessageBus.h
+    src/myiperf/ControlProtocol.h
+    src/myiperf/NetworkInterfaceFactory.h
+    src/myiperf/PacketDispatcher.h
+    src/myiperf/PacketGenerator.h
+    src/myiperf/PacketReceiveStats.h
+    src/myiperf/PacketReceiver.h
+    src/myiperf/PacketStreamParser.h
+    src/myiperf/ParsedPacket.h
+    src/myiperf/ServerTestSession.h
+    src/myiperf/TestSessionContext.h
+)
+
+set(MYIPERF_CORE_SOURCES
+    src/myiperf/ClientTestSession.cpp
+    src/myiperf/Config.cpp
+    src/myiperf/ConfigParser.cpp
+    src/myiperf/ControlChannel.cpp
+    src/myiperf/ControlMessageBus.cpp
+    src/myiperf/ControlProtocol.cpp
+    src/myiperf/Logger.cpp
+    src/myiperf/NetworkInterfaceFactory.cpp
+    src/myiperf/PacketDispatcher.cpp
+    src/myiperf/PacketGenerator.cpp
+    src/myiperf/PacketReceiveStats.cpp
+    src/myiperf/PacketReceiver.cpp
+    src/myiperf/PacketStreamParser.cpp
+    src/myiperf/ServerTestSession.cpp
+    src/myiperf/TestController.cpp
+)
+
 if(WIN32)
-    list(APPEND COMMON_SOURCE_FILES WinIOCPNetworkInterface.cpp)
-    list(APPEND COMMON_HEADER_FILES WinIOCPNetworkInterface.h)
-    message(STATUS "Building for Windows (including WinIOCPNetworkInterface.cpp)")
-elseif(UNIX) # Covers Linux, macOS, etc.
-    list(APPEND COMMON_SOURCE_FILES LinuxAsyncNetworkInterface.cpp)
-    list(APPEND COMMON_HEADER_FILES LinuxAsyncNetworkInterface.h)
-    message(STATUS "Building for Unix-like system (including LinuxAsyncNetworkInterface.cpp)")
+    list(APPEND MYIPERF_CORE_SOURCES src/myiperf/platform/WinIOCPNetworkInterface.cpp)
+    list(APPEND MYIPERF_CORE_PRIVATE_HEADERS src/myiperf/platform/WinIOCPNetworkInterface.h)
+    message(STATUS "Building myiperf_core for Windows")
+elseif(UNIX)
+    list(APPEND MYIPERF_CORE_SOURCES src/myiperf/platform/LinuxAsyncNetworkInterface.cpp)
+    list(APPEND MYIPERF_CORE_PRIVATE_HEADERS src/myiperf/platform/LinuxAsyncNetworkInterface.h)
+    message(STATUS "Building myiperf_core for Unix-like system")
 else()
     message(FATAL_ERROR "Unsupported platform. Only Windows and Unix-like systems are supported.")
 endif()
 
-# Add the main executable.
-add_executable(${CMAKE_PROJECT_NAME} ${COMMON_SOURCE_FILES})
+add_library(myiperf_core STATIC
+    ${MYIPERF_CORE_PUBLIC_HEADERS}
+    ${MYIPERF_CORE_PRIVATE_HEADERS}
+    ${MYIPERF_CORE_SOURCES}
+)
+add_library(MyIperf::core ALIAS myiperf_core)
 
-# --- Compiler-specific Optimizations ---
-# Add aggressive optimization flags for Release builds to maximize performance.
-if(MSVC)
-    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:/O2>
-        $<$<CONFIG:RelWithDebInfo>:/O2>
-    )
-    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
-else()
-    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Release>:-O3 -flto>
-        $<$<CONFIG:RelWithDebInfo>:-O2 -flto>
-    )
-    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
-    set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
-endif()
-
-# Add include directories for all source files.
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR} # For all .h files in the root
+set_target_properties(myiperf_core PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${MYIPERF_OUTPUT_LIB_DIR}"
 )
 
-# Link the executable against the nlohmann/json library.
-# This works for both the local and fetched versions.
-target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE nlohmann_json)
+target_include_directories(myiperf_core
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/myiperf"
+)
 
-# Add platform-specific settings.
-if(WIN32)
-    # On Windows, we need to link against the Winsock library for network operations.
-    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32 Mswsock)
-    message(STATUS "Linking with ws2_32 and Mswsock for Windows.")
+target_link_libraries(myiperf_core PUBLIC nlohmann_json)
 
-    # Define NOMINMAX to prevent min/max macro conflicts with the C++ standard library.
-    # This is a cleaner approach than defining it in a source file.
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE NOMINMAX)
-    message(STATUS "Adding NOMINMAX compile definition for Windows.")
+if(MYIPERF_ENABLE_DEBUG_LOGS)
+    target_compile_definitions(myiperf_core PRIVATE MYIPERF_ENABLE_DEBUG_LOGS=1)
 endif()
-# For Linux, epoll is part of glibc, so no explicit linking is typically required.
 
-# Optional: Set output directory for executables
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+if(WIN32)
+    target_link_libraries(myiperf_core PRIVATE ws2_32 Mswsock)
+    target_compile_definitions(myiperf_core PRIVATE NOMINMAX)
+endif()
+
+add_executable(IPEFTC
+    app/ipeftc/main.cpp
+    app/ipeftc/CLIHandler.cpp
+    app/ipeftc/CLIHandler.h
+)
+
+set_target_properties(IPEFTC PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${MYIPERF_OUTPUT_BIN_DIR}"
+)
+
+target_include_directories(IPEFTC PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/app/ipeftc"
+)
+
+target_link_libraries(IPEFTC PRIVATE MyIperf::core)
+
+foreach(target myiperf_core IPEFTC)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /utf-8
+            $<$<CONFIG:Release>:/O2>
+            $<$<CONFIG:RelWithDebInfo>:/O2>
+        )
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+    else()
+        target_compile_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-O3 -flto>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -flto>
+        )
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+        set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
+    endif()
+endforeach()

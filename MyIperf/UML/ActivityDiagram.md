@@ -1,177 +1,198 @@
-# MyIperf 활동 및 상태 다이어그램
+# 실행 흐름 다이어그램
 
-이 문서는 테스트 중 `MyIperf` 프로그램의 전체 프로세스와 내부 상태 전환을 설명합니다.
+이 문서는 MyIperf의 전체 실행 흐름과 coroutine 대기 지점을 요약한다. 상위 흐름은
+`co_await` 덕분에 순차 코드처럼 보이지만, 실제 네트워크 I/O와 제어 메시지 대기는
+awaiter가 coroutine handle을 저장했다가 완료 시점에 `resume()`하는 방식으로 동작한다.
 
-## 1. 전체 워크플로 (활동 다이어그램)
-
-아래 다이어그램은 사용자가 `MyIperf`를 실행하는 순간부터 테스트가 완료될 때까지 서버와 클라이언트의 활동 순서를 보여줍니다.
+## 프로그램 시작과 테스트 시작
 
 ```mermaid
-graph TD
-    subgraph "사용자"
-        A(ipeftc 실행<br>--mode client/server 사용)
-    end
-
-    subgraph "서버 프로세스"
-        B[TestController 생성]
-        C{1단계 테스트 시작}
-        D[Listen 소켓 생성 및 Accept 대기]
-        E[클라이언트 연결 수락]
-        F[설정 수신]
-        G[설정 ACK 전송]
-        H[테스트 데이터 수신]
-        I(TEST_FIN 수신)
-        J[통계 전송]
-        K[통계 ACK 수신]
-        
-        C2{2단계 테스트 시작}
-        H2[테스트 데이터 전송]
-        I2(테스트 시간 종료)
-        J2[TEST_FIN 전송]
-        K2[통계 수신]
-        L2[통계 ACK 전송]
-
-        L[테스트 종료]
-    end
-
-    subgraph "클라이언트 프로세스"
-        M[TestController 생성]
-        N{1단계 테스트 시작}
-        O[서버에 연결 시도]
-        P[연결 성공]
-        Q[설정 전송]
-        R[설정 ACK 수신]
-        S[테스트 데이터 전송]
-        T(테스트 시간 종료)
-        U[TEST_FIN 전송]
-        V[통계 수신]
-        W[통계 ACK 전송]
-
-        N2{2단계 테스트 대기}
-        S2[테스트 데이터 수신]
-        T2(TEST_FIN 수신)
-        U2[통계 전송]
-        V2[통계 ACK 수신]
-
-        X[테스트 종료]
-    end
-
-    %% Initialization
-    A --> B & M
-    B --> C
-    M --> N
-    C --> D
+flowchart TD
+    A[main] --> B[TestController controller 생성]
+    B --> C[CLIHandler cli 생성]
+    C --> D[cli.run argc argv]
+    D --> E[CLIHandler가 Config 파싱]
+    E --> F[TestController.startTest config]
+    F --> G[TestController.reset]
+    G --> H[currentConfig 저장]
+    H --> I[mainTestTask = runTestCoroutine]
+    I --> J[mainTestTask.start]
+    J --> K[TestSessionContext 생성]
+    K --> L{Config mode}
+    L -->|CLIENT| M[ClientTestSession 생성]
+    L -->|SERVER| N[ServerTestSession 생성]
+    M --> O[co_await session.run]
     N --> O
-
-    %% 1단계: 클라이언트 -> 서버
-    %% Connection & Config
-    O --> E --> P --> Q --> F --> G --> R
-
-    %% Data Transfer
-    R --> S
-    S --> H
-    S --> T
-
-    %% C->S Finish & Stats
-    T --> U --> I
-    H --> I
-    I --> J --> V --> W --> K
-    
-    %% 2단계: 서버 -> 클라이언트
-    %% Start S->C Test
-    K --> C2
-    W --> N2
-    C2 --> H2
-    N2 --> S2
-
-    %% Data Transfer
-    H2 --> S2
-    H2 --> I2
-    
-    %% S->C Finish & Stats
-    I2 --> J2 --> T2
-    S2 --> T2
-    T2 --> U2 --> K2 --> L2 --> V2
-    
-    %% Termination
-    L2 --> L
-    V2 --> X
+    O --> P[session 완료 또는 예외]
+    P --> Q[signalCompletion]
+    Q --> R[main thread future wait 해제]
+    R --> S[controller.stopTest]
+    S --> T[receiver, generator, network 정리]
 ```
 
-### 설명
+## Client session 흐름
 
-1.  **실행**: 사용자가 서버 (`--mode server`) 또는 클라이언트 (`--mode client`) 옵션으로 프로그램을 실행합니다.
-2.  **테스트 준비**:
-    *   **서버**: 클라이언트 연결을 기다립니다 (`Accept`).
-    *   **클라이언트**: 서버에 연결을 시도합니다 (`Connect`).
-3.  **설정 교환**:
-    *   연결되면 클라이언트는 테스트 설정을 서버에 보냅니다.
-    *   서버는 설정을 수신하고 확인(ACK)을 다시 보냅니다.
-4.  **1단계 테스트: 클라이언트 -> 서버**:
-    *   클라이언트는 설정된 시간 동안 서버에 테스트 데이터 패킷을 보냅니다.
-    *   서버는 이 패킷들을 수신합니다.
-    *   시간이 만료되면 클라이언트는 `TEST_FIN`을 보내고, 서버는 통계를 보내고, 클라이언트는 ACK로 응답하여 1단계를 마칩니다.
-5.  **2단계 테스트: 서버 -> 클라이언트**:
-    *   1단계가 끝나면 서버가 클라이언트로 테스트 데이터 패킷을 보내기 시작합니다.
-    *   클라이언트는 이 패킷들을 수신합니다.
-    *   서버의 테스트 시간이 만료되면 `TEST_FIN`을 보내고, 클라이언트는 통계를 보내고, 서버는 ACK로 응답하여 2단계를 마칩니다.
-6.  **완료**: 모든 단계가 끝나면 양측은 연결을 닫고 프로그램을 종료합니다.
+```mermaid
+flowchart TD
+    A[ClientTestSession.run] --> B[connectAndHandshake]
+    B --> C[network.initialize 0.0.0.0:0]
+    C --> D[co_await network.connect]
+    D --> E[connect 완료 시 coroutine 재개]
+    E --> F[control.attachReceiver receiver]
+    F --> G[control.send CONFIG_HANDSHAKE]
+    G --> H[control.waitFor CONFIG_ACK]
+    H --> I[runClientToServerPhase]
 
-## 2. TestController 상태 전환 (상태 다이어그램)
+    I --> J[generator.sendPackets]
+    J --> K[co_await network.send 반복]
+    K --> L[control.send TEST_FIN]
+    L --> M[control.waitFor TEST_FIN]
+    M --> N[control.send STATS_EXCHANGE]
+    N --> O[control.waitFor STATS_ACK]
+    O --> P[phase 1 통계 저장]
+    P --> Q[runServerToClientPhase]
 
-아래 다이어그램은 특정 이벤트에 대한 응답으로 `TestController`의 내부 상태가 어떻게 변하는지를 보여주는 상태 머신 다이어그램입니다.
+    Q --> R[control.send CLIENT_READY]
+    R --> S[receiver.resetStats]
+    S --> T[control.waitFor TEST_FIN]
+    T --> U[receiver.getStats]
+    U --> V[control.send STATS_EXCHANGE]
+    V --> W[control.waitFor STATS_ACK]
+    W --> X[control.send SHUTDOWN_ACK]
+    X --> Y[FINISHED]
+```
+
+## Server session 흐름
+
+```mermaid
+flowchart TD
+    A[ServerTestSession.run] --> B[acceptAndReceiveConfig]
+    B --> C[network.prepareServer]
+    C --> D[co_await network.accept]
+    D --> E[accept 완료 시 coroutine 재개]
+    E --> F[control.attachReceiver receiver]
+    F --> G[control.waitFor CONFIG_HANDSHAKE]
+    G --> H[Config payload 적용]
+    H --> I[control.send CONFIG_ACK]
+    I --> J[runClientToServerPhase]
+
+    J --> K[receiver.resetStats]
+    K --> L[control.waitFor TEST_FIN]
+    L --> M[control.send TEST_FIN]
+    M --> N[control.waitFor STATS_EXCHANGE]
+    N --> O[receiver.getStats]
+    O --> P[control.send STATS_ACK]
+    P --> Q[runServerToClientPhase]
+
+    Q --> R[control.waitFor CLIENT_READY]
+    R --> S[generator.resetStats]
+    S --> T[generator.sendPackets]
+    T --> U[co_await network.send 반복]
+    U --> V[control.send TEST_FIN]
+    V --> W[control.waitFor STATS_EXCHANGE]
+    W --> X[generator.getStats]
+    X --> Y[control.send STATS_ACK]
+    Y --> Z[control.waitFor SHUTDOWN_ACK]
+    Z --> AA[FINISHED]
+```
+
+## 네트워크 awaiter 재개 흐름
+
+```mermaid
+sequenceDiagram
+    participant Session as Session coroutine
+    participant Awaiter as Network Awaiter
+    participant Backend as Platform doAsyncXxx
+    participant Worker as IOCP or epoll worker
+
+    Session->>Awaiter: co_await network.connect/accept/send/receive
+    Awaiter->>Awaiter: await_ready false
+    Awaiter->>Backend: await_suspend(handle), doAsyncXxx(callback)
+    Note over Session: coroutine suspend
+    Backend-->>Worker: native async I/O 등록
+    Worker-->>Backend: I/O completion event
+    Backend-->>Awaiter: callback(result)
+    Awaiter->>Awaiter: result 저장
+    Awaiter->>Session: handle.resume()
+    Session->>Awaiter: await_resume()
+    Awaiter-->>Session: result 반환
+```
+
+## Control message 수신/대기 흐름
+
+```mermaid
+sequenceDiagram
+    participant Receiver as PacketReceiver
+    participant Parser as PacketStreamParser
+    participant Dispatcher as PacketDispatcher
+    participant Bus as ControlMessageBus
+    participant Session as Session coroutine
+
+    Session->>Bus: co_await control.waitFor(type)
+    Bus->>Bus: buffered message 확인
+    alt message already buffered
+        Bus-->>Session: await_ready true
+    else not arrived yet
+        Bus->>Bus: continuation 등록
+        Note over Session: coroutine suspend
+    end
+
+    Receiver->>Receiver: co_await network.receive
+    Receiver->>Parser: append bytes
+    Parser-->>Receiver: ParsedPacket 목록
+    Receiver->>Dispatcher: dispatch packets
+    alt DATA_PACKET
+        Dispatcher->>Dispatcher: PacketReceiveStats 갱신
+    else control message
+        Dispatcher->>Bus: deliver header payload
+        Bus->>Session: continuation.resume()
+    end
+```
+
+## TestController 상태 전이
 
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> INITIALIZING: startTest(client/server)
-    INITIALIZING --> CONNECTING: Client init complete
-    INITIALIZING --> ACCEPTING: Server init complete
+    IDLE --> CONNECTING: client startTest
+    CONNECTING --> SENDING_CONFIG: connect 성공
+    SENDING_CONFIG --> WAITING_FOR_ACK: CONFIG_HANDSHAKE 전송
+    WAITING_FOR_ACK --> RUNNING_TEST: CONFIG_ACK 수신
 
-    CONNECTING --> SENDING_CONFIG: Connection complete
-    SENDING_CONFIG --> WAITING_FOR_ACK: Config sent
-    WAITING_FOR_ACK --> RUNNING_TEST: ACK received
+    IDLE --> ACCEPTING: server startTest
+    ACCEPTING --> WAITING_FOR_CONFIG: accept 성공
+    WAITING_FOR_CONFIG --> RUNNING_TEST: CONFIG_HANDSHAKE 수신
 
-    ACCEPTING --> WAITING_FOR_CONFIG: Client accepted
-    WAITING_FOR_CONFIG --> RUNNING_TEST: Config received, ACK sent
+    RUNNING_TEST --> FINISHING: phase 1 송수신 종료
+    FINISHING --> EXCHANGING_STATS: TEST_FIN 교환
+    EXCHANGING_STATS --> WAITING_FOR_SERVER_FIN: client phase 1 완료
+    EXCHANGING_STATS --> WAITING_FOR_CLIENT_READY: server phase 1 완료
 
-    RUNNING_TEST --> FINISHING: Test duration ended (Client)
-    RUNNING_TEST --> FINISHING: TEST_FIN received (Server)
+    WAITING_FOR_SERVER_FIN --> EXCHANGING_SERVER_STATS: client가 server TEST_FIN 수신
+    EXCHANGING_SERVER_STATS --> FINISHED: client가 최종 STATS_ACK 수신 후 SHUTDOWN_ACK 전송
 
-    FINISHING --> EXCHANGING_STATS: TEST_FIN received (Client)
-    FINISHING --> WAITING_FOR_CLIENT_READY: STATS_ACK sent (Server)
+    WAITING_FOR_CLIENT_READY --> RUNNING_SERVER_TEST: server가 CLIENT_READY 수신
+    RUNNING_SERVER_TEST --> SERVER_TEST_FINISHING: phase 2 송신 종료
+    SERVER_TEST_FINISHING --> WAITING_FOR_SHUTDOWN_ACK: 최종 STATS_ACK 전송
+    WAITING_FOR_SHUTDOWN_ACK --> FINISHED: SHUTDOWN_ACK 수신
 
-    EXCHANGING_STATS --> WAITING_FOR_SERVER_FIN: STATS_ACK received, CLIENT_READY sent (Client)
+    IDLE --> ERRORED: setup 실패
+    CONNECTING --> ERRORED: connect 실패
+    ACCEPTING --> ERRORED: accept 실패
+    RUNNING_TEST --> ERRORED: runtime 실패
+    WAITING_FOR_ACK --> ERRORED: timeout 또는 예외
+    WAITING_FOR_CONFIG --> ERRORED: timeout 또는 예외
 
-    WAITING_FOR_CLIENT_READY --> RUNNING_SERVER_TEST: CLIENT_READY received (Server)
-    RUNNING_SERVER_TEST --> SERVER_TEST_FINISHING: Test duration ended (Server)
-    
-    WAITING_FOR_SERVER_FIN --> EXCHANGING_SERVER_STATS: TEST_FIN received (Client)
-    SERVER_TEST_FINISHING --> WAITING_FOR_SHUTDOWN_ACK: STATS_ACK sent (Server)
-
-    EXCHANGING_SERVER_STATS --> FINISHED: STATS_ACK received (Client)
-    WAITING_FOR_SHUTDOWN_ACK --> FINISHED: Shutdown ACK received (Server)
-
-    ERRORED --> [*]
     FINISHED --> [*]
+    ERRORED --> [*]
 ```
 
-### 상태 설명
+## 읽을 때 중요한 점
 
-*   **IDLE**: 명령을 기다리는 초기 상태.
-*   **CONNECTING**: 클라이언트가 서버에 연결을 시도하는 중.
-*   **ACCEPTING**: 서버가 클라이언트 연결을 기다리는 중.
-*   **SENDING_CONFIG**: 클라이언트가 서버에 테스트 설정을 보내는 중.
-*   **WAITING_FOR_ACK**: 클라이언트가 서버의 설정 확인을 기다리는 중.
-*   **WAITING_FOR_CONFIG**: 서버가 클라이언트의 설정을 기다리는 중.
-*   **RUNNING_TEST**: 기본 데이터 전송 단계(클라이언트->서버)가 진행 중.
-*   **FINISHING**: C->S 데이터 전송이 종료되었고, 양측이 확인을 위해 핸드셰이크를 수행하는 중.
-*   **EXCHANGING_STATS**: 클라이언트와 서버가 C->S 테스트의 최종 통계를 교환하는 중.
-*   **WAITING_FOR_CLIENT_READY**: 서버가 S->C 테스트 준비가 되었다는 클라이언트의 신호를 기다리는 중.
-*   **RUNNING_SERVER_TEST**: 두 번째 데이터 전송 단계(서버->클라이언트)가 진행 중.
-*   **WAITING_FOR_SERVER_FIN**: 클라이언트가 서버의 데이터 전송이 끝나기를 기다리는 중.
-*   **SERVER_TEST_FINISHING**: S->C 데이터 전송이 종료되었고, 서버가 최종 핸드셰이크를 시작하는 중.
-*   **EXCHANGING_SERVER_STATS**: S->C 테스트의 최종 통계가 교환되는 중.
-*   **FINISHED**: 모든 프로세스가 성공적으로 완료됨.
-*   **ERRORED**: 오류가 발생하여 테스트가 비정상적으로 종료됨.
+- `control.waitFor`는 메시지가 이미 도착해 있으면 즉시 통과하고, 없으면 coroutine handle을 저장한다.
+- `PacketReceiver`는 background receive loop를 돌며 `DATA_PACKET`은 통계로, control message는 `ControlMessageBus`로 보낸다.
+- `ControlMessageBus::deliver`는 대기 중인 coroutine이 있으면 lock 밖에서 `resume()`한다.
+- `network.connect/accept/send/receive`는 상위 API이고, 실제 platform I/O는 `doAsyncXxx`와 worker thread가 처리한다.
+- session coroutine은 실패 시 예외를 던지고, `TestController::runTestCoroutine`이 잡아 `ERRORED`로 전이한다.
+- `INITIALIZING` state enum은 존재하지만 현재 코드에서는 명시적으로 전이하지 않는다.

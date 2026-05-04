@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/TestRunner2.dir/main.cpp.o CMakeFiles/TestRunner2.dir/Message.cpp.o CMakeFiles/TestRunner2.dir/ProcessManager.cpp.o CMakeFiles/TestRunner2.dir/ControlServer.cpp.o CMakeFiles/TestRunner2.dir/ControlClient.cpp.o -o TestRunner2  -lpthread

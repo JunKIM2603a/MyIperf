@@ -1,281 +1,322 @@
 # 클래스 다이어그램
 
-이 문서는 `MyIperf` 프로젝트의 주요 클래스 구조와 관계를 설명합니다.
+이 문서는 MyIperf의 전체 객체 관계를 코드 이해용으로 요약한다. 핵심은
+`TestController`가 실행에 필요한 객체를 소유하고, session 객체들은
+`TestSessionContext`를 통해 그 객체들을 참조로 빌려 쓴다는 점이다.
 
-## 1. 다이어그램
+## 관계 표기
+
+- `*--`: 소유 관계. `unique_ptr` 또는 값 멤버처럼 lifetime을 관리한다.
+- `-->`: 참조 또는 raw pointer 관계. 객체를 빌려 쓰며 소유하지 않는다.
+- `..>`: 생성, 호출, 일시적 의존 관계.
+- `Task`는 coroutine frame handle을 소유한다.
+- `Awaiter`는 handle을 빌려 `co_await` 중인 parent coroutine과 child coroutine을 연결한다.
+
+## 전체 객체 소유/참조 구조
 
 ```mermaid
 classDiagram
     direction LR
 
+    class main {
+        +main()
+    }
+
     class CLIHandler {
         -TestController& testController
-        +CLIHandler(controller)
-        +run(argc, argv) void
-        +static printHelp() void
+        +CLIHandler(TestController& controller)
+        +run(argc, argv) bool
         -parseArgs(argc, argv) Config
-    }
-
-    class ConfigParser {
-        -string filepath
-        -Config configData
-        +ConfigParser(filepath)
-        +load() bool
-        +getConfig() Config
-    }
-
-    class Config {
-        <<Data>>
-        -int packetSize
-        -int numPackets
-        -int sendIntervalMs
-        -string protocol
-        -string targetIP
-        -int port
-        -TestMode mode
-        -bool saveLogs
-        -int handshakeTimeoutMs
-        +Config()
-        +toJson() json
-        +static fromJson(json) Config
-    }
-
-    class TestMode {
-        <<enumeration>>
-        CLIENT
-        SERVER
+        +printHelp() void
     }
 
     class TestController {
-        <<Singleton>>
-        -atomic~State~ currentState
         -unique_ptr~NetworkInterface~ networkInterface
         -unique_ptr~PacketGenerator~ packetGenerator
         -unique_ptr~PacketReceiver~ packetReceiver
+        -unique_ptr~ControlMessageBus~ controlMessages
+        -unique_ptr~ControlChannel~ controlChannel
         -Config currentConfig
-        -promise~void~ testCompletionPromise
-        -atomic~bool~ testCompletionPromise_set
-        -uint32_t m_expectedDataPacketCounter
-        -atomic~long long~ m_contentMismatchCount
-        -time_point m_testStartTime
-        -TestStats m_remoteStats
-        -TestStats m_clientStatsPhase1
-        -TestStats m_serverStatsPhase1
-        -TestStats m_clientStatsPhase2
-        -TestStats m_serverStatsPhase2
-        -mutex m_cliBlockMutex
-        -condition_variable m_cliBlockCv
-        -atomic~bool~ m_cliBlockFlag
-        -atomic~bool~ m_stopped
-        -thread m_handshakeWatchdog
-        -atomic~bool~ m_handshakeWatchdogArmed
-        -mutex m_handshakeWatchdogMutex
-        -condition_variable m_handshakeWatchdogCv
-        -bool m_handshakeWatchdogCancel
-        +TestController()
-        +~TestController()
-        +startTest(config) void
+        -Task mainTestTask
+        -atomic~State~ currentState
+        +startTest(Config) void
         +stopTest() void
         +getTestCompletionFuture() future~void~
-        +parseStats(payload) json
-        -reset() void
-        -onPacket(header, payload) void
-        -onTestCompleted() void
-        -startHandshakeWatchdog() void
-        -cancelHandshakeWatchdog() void
-        -sendClientStatsAndAwaitAck() void
+        -runTestCoroutine() Task
         -transitionTo(State) void
-        -transitionTo_nolock(State) void
-        -cancelTimer() void
     }
 
-    class State {
-        <<enumeration>>
-        IDLE
-        INITIALIZING
-        CONNECTING
-        SENDING_CONFIG
-        WAITING_FOR_ACK
-        ACCEPTING
-        WAITING_FOR_CONFIG
-        RUNNING_TEST
-        FINISHING
-        EXCHANGING_STATS
-        WAITING_FOR_CLIENT_READY
-        RUNNING_SERVER_TEST
-        WAITING_FOR_SERVER_FIN
-        SERVER_TEST_FINISHING
-        EXCHANGING_SERVER_STATS
-        WAITING_FOR_SHUTDOWN_ACK
-        FINISHED
-        ERRORED
+    class TestSessionContext {
+        +Config& config
+        +NetworkInterface& network
+        +PacketGenerator& generator
+        +PacketReceiver& receiver
+        +ControlChannel& control
+        +TestStats& clientStatsPhase1
+        +TestStats& serverStatsPhase1
+        +TestStats& clientStatsPhase2
+        +TestStats& serverStatsPhase2
+        +function transitionTo
+    }
+
+    class ClientTestSession {
+        -TestSessionContext& context
+        +run() Task
+        -connectAndHandshake() Task
+        -runClientToServerPhase() Task
+        -runServerToClientPhase() Task
+    }
+
+    class ServerTestSession {
+        -TestSessionContext& context
+        +run() Task
+        -acceptAndReceiveConfig() Task
+        -runClientToServerPhase() Task
+        -runServerToClientPhase() Task
     }
 
     class NetworkInterface {
-        <<Abstract>>
-        +virtual ~NetworkInterface()
-        +virtual initialize(ip, port) bool
-        +virtual close() void
-        +virtual asyncConnect(ip, port, cb) void
-        +virtual asyncAccept(cb) void
-        +virtual asyncSend(data, cb) void
-        +virtual asyncReceive(size, cb) void
-        +virtual blockingSend(data) int
-        +virtual blockingReceive(size) vector~char~
-    }
-
-    class WinIOCPNetworkInterface {
-        -HANDLE iocpHandle
-        -SOCKET listenSocket
-        -SOCKET clientSocket
-        -iocpWorkerThread() void
-    }
-
-    class LinuxAsyncNetworkInterface {
-        -int epollFd
-        -int listenFd
-        -int clientFd
-        -epollWorkerThread() void
+        <<interface>>
+        +initialize(ip, port) bool
+        +prepareServer(ip, port) bool
+        +close() void
+        +connect(ip, port) ConnectAwaiter
+        +accept() AcceptAwaiter
+        +send(data) SendAwaiter
+        +receive(size) ReceiveAwaiter
+        #doAsyncConnect(ip, port, callback) void
+        #doAsyncAccept(callback) void
+        #doAsyncSend(data, callback) void
+        #doAsyncReceive(size, callback) void
     }
 
     class PacketGenerator {
         -NetworkInterface* networkInterface
-        -atomic~bool~ running
-        -atomic~long long~ totalBytesSent
-        -atomic~long long~ totalPacketsSent
         -Config config
-        -uint32_t packetCounter
-        -CompletionCallback completionCallback
-        -thread m_generatorThread
-        -mutex m_mutex
-        -condition_variable m_cv
-        -time_point m_startTime
-        -time_point m_endTime
-        -TestStats m_LastStats
-        +PacketGenerator(netInterface)
-        +~PacketGenerator()
-        +start(config, onComplete) void
+        -atomic~bool~ running
+        +sendPackets(Config) Task
         +stop() void
         +resetStats() void
         +getStats() TestStats
-        +lastStats() TestStats
-        +saveLastStats(Stats) void
-        -sendNextPacket() void
-        -generatorThreadLoop() void
-        -onPacketSent(bytesSent) void
-        -shouldContinueSending() bool
-        -preparePacketTemplate() void
     }
 
     class PacketReceiver {
         -NetworkInterface* networkInterface
-        -atomic~bool~ running
-        -time_point m_startTime
-        -time_point m_endTime
-        -atomic~long long~ currentBytesReceived
-        -mutable mutex statsMutex
-        -int packetBufferSize
-        -vector~char~ m_receiveBuffer
-        -PacketCallback onPacketCallback
-        -ReceiverCompletionCallback onCompleteCallback
-        -uint32_t expectedPacketCounter
-        -atomic~long long~ m_totalPacketsReceived
-        -atomic~long long~ m_failedChecksumCount
-        -atomic~long long~ m_sequenceErrorCount
-        -atomic~long long~ m_contentMismatchCount
-        +PacketReceiver(netInterface)
-        +~PacketReceiver()
-        +start(onPacket) void
-        +start(onPacket, onComplete) void
+        -PacketStreamParser parser
+        -PacketReceiveStats stats
+        -unique_ptr~PacketDispatcher~ dispatcher
+        -Task receiverTask
+        +start(ControlMessageBus) void
         +stop() void
-        +getStats() TestStats
         +resetStats() void
-        -receiveNextPacket() void
-        -onPacketReceived(data, bytesReceived) void
-        -processBuffer() void
+        +getStats() TestStats
+        -receiverLoop() Task
     }
 
-    class Logger {
-        <<Static>>
-        +static start() void
-        +static stop() void
-        +static log(message) void
-        +static writeFinalReport(config, clientStats, serverStats) void
+    class ControlMessageBus {
+        -map pendingWaits
+        -map bufferedMessages
+        +waitFor(MessageType, timeoutMs) Awaiter
+        +deliver(PacketHeader, payload) void
+        +clear() void
+        +cancelAll() void
     }
 
-    class Protocol {
-        <<Helper>>
-        +struct PacketHeader
-        +MessageType messageType
-        +struct TestStats
-        +static calculateChecksum(data, size) uint32_t
-        +static verifyPacket(header, payload) bool
+    class ControlChannel {
+        -NetworkInterface& network
+        -ControlMessageBus& messages
+        +attachReceiver(PacketReceiver&) void
+        +waitFor(MessageType, timeoutMs) Awaiter
+        +send(MessageType, payload) Task
+        +clear() void
+        +cancelAll() void
     }
 
-    class MessageType {
-        <<enumeration>>
-        CONFIG_HANDSHAKE
-        CONFIG_ACK
-        DATA_PACKET
-        STATS_EXCHANGE
-        STATS_ACK
-        TEST_FIN
-        CLIENT_READY
-        SHUTDOWN_ACK
-    }
+    main ..> TestController : creates
+    main ..> CLIHandler : creates
+    CLIHandler --> TestController : reference, no copy
 
-    CLIHandler ..> ConfigParser : Uses
-    CLIHandler ..> TestController : Controls
-    ConfigParser o-- Config : Owns
-    main ..> CLIHandler : Creates and runs
-    main ..> Logger : Manages
-    main ..> TestController : Manages
+    TestController *-- NetworkInterface : owns unique_ptr
+    TestController *-- PacketGenerator : owns unique_ptr
+    TestController *-- PacketReceiver : owns unique_ptr
+    TestController *-- ControlMessageBus : owns unique_ptr
+    TestController *-- ControlChannel : owns unique_ptr
+    TestController ..> TestSessionContext : creates in coroutine
+    TestController ..> ClientTestSession : creates by mode
+    TestController ..> ServerTestSession : creates by mode
 
-    TestController *-- "1" NetworkInterface : Owns
-    TestController *-- "1" PacketGenerator : Owns
-    TestController *-- "1" PacketReceiver : Owns
-    TestController ..> Config : Uses
-    TestController ..> Logger : Uses
-    TestController ..> Protocol : Uses
-    TestController ..> nlohmann.json : Uses
+    TestSessionContext --> NetworkInterface : reference
+    TestSessionContext --> PacketGenerator : reference
+    TestSessionContext --> PacketReceiver : reference
+    TestSessionContext --> ControlChannel : reference
+    TestSessionContext --> Config : reference
 
-    PacketGenerator ..> NetworkInterface : Uses
-    PacketGenerator ..> Protocol : Uses
-    PacketGenerator ..> Config : Uses
+    ClientTestSession --> TestSessionContext : reference
+    ServerTestSession --> TestSessionContext : reference
 
-    PacketReceiver ..> NetworkInterface : Uses
-    PacketReceiver ..> Protocol : Uses
-    PacketReceiver ..> Config : Uses
-
-    NetworkInterface <|-- WinIOCPNetworkInterface : Implements
-    NetworkInterface <|-- LinuxAsyncNetworkInterface : Implements
-
-    Config ..> nlohmann.json : Uses
-    Config ..> TestMode : Uses
-    TestController ..> State : Uses
-    Protocol ..> MessageType : Uses
+    PacketGenerator --> NetworkInterface : raw pointer
+    PacketReceiver --> NetworkInterface : raw pointer
+    ControlChannel --> NetworkInterface : reference
+    ControlChannel --> ControlMessageBus : reference
 ```
 
-## 2. 주요 클래스 설명
+## 네트워크 플랫폼 구현
 
-* **`main`**: 애플리케이션 진입점. `Logger` 및 `CLIHandler`와 같은 고수준 구성 요소를 초기화하고 조율합니다.
-* **`CLIHandler`**: 명령줄 인수를 구문 분석하고 `TestController`를 제어하여 테스트를 시작하는 역할을 합니다.
-* **`ConfigParser`**: JSON 설정 파일을 읽고 구문 분석하여 `Config` 객체를 생성합니다.
-* **`Config`**: 모드, 대상 IP, 포트 및 패킷 크기와 같은 테스트의 모든 설정 정보를 저장하는 데이터 클래스입니다.
-* **`TestController`**: 전체 테스트 수명 주기를 관리하는 핵심 클래스. 상태 머신을 사용하여 테스트 흐름을 제어하고 `NetworkInterface`, `PacketGenerator` 및 `PacketReceiver`의 동작을 조정합니다.
-* **`NetworkInterface`**: 네트워크 통신을 위한 추상 인터페이스. 플랫폼별 구현이 있습니다.
-* **`WinIOCPNetworkInterface`**: 고성능 비동기 I/O를 위해 Windows I/O 완료 포트(IOCP)를 사용하여 `NetworkInterface`를 구현합니다.
-* **`LinuxAsyncNetworkInterface`**: 고성능 비동기 I/O를 위해 Linux epoll을 사용하여 `NetworkInterface`를 구현합니다.
-* **`PacketGenerator`**: 클라이언트 모드에서 설정에 따라 테스트 패킷을 생성하고 `NetworkInterface`를 통해 전송합니다.
-* **`PacketReceiver`**: 네트워크에서 데이터를 수신하고 완전한 패킷으로 조립하며 유효성을 검사하고 통계를 기록합니다.
-* **`Protocol`**: `PacketHeader`, `MessageType` 및 `TestStats` 구조를 포함하여 통신 프로토토콜을 정의하는 헬퍼 네임스페이스/클래스입니다.
-* **`Logger`**: 콘솔, 파일 및 명명된 파이프에 쓸 수 있는 스레드 안전한 비동기 로깅 유틸리티를 제공하는 정적 클래스입니다.
+`NetworkInterface`는 상위 coroutine 코드가 사용하는 공통 API를 제공한다. 실제 I/O는
+플랫폼 구현체의 protected backend hook인 `doAsyncXxx`에서 처리한다.
 
-## 3. 관계 설명
+```mermaid
+classDiagram
+    direction TB
 
-* **제어**: `CLIHandler`는 `startTest`와 같은 `TestController`의 메서드를 호출하여 테스트 흐름을 제어합니다.
-* **구성**: `TestController`는 `unique_ptr`를 통해 `NetworkInterface`, `PacketGenerator` 및 `PacketReceiver`의 인스턴스를 소유하여 수명 주기를 관리합니다.
-* **연관/의존성**:
-  * `PacketGenerator`와 `PacketReceiver`는 `NetworkInterface`에 대한 포인터를 사용하여 데이터를 보내거나 받습니다.
-  * 여러 클래스가 `Config` 객체를 참조하여 테스트 설정을 읽습니다.
-* **실현/구현**: `WinIOCPNetworkInterface` 및 `LinuxAsyncNetworkInterface`는 추상 `NetworkInterface`의 구체적인 구현입니다.
+    class NetworkInterface {
+        <<interface>>
+        +connect(ip, port) ConnectAwaiter
+        +accept() AcceptAwaiter
+        +send(data) SendAwaiter
+        +receive(size) ReceiveAwaiter
+        #doAsyncConnect(ip, port, callback) void
+        #doAsyncAccept(callback) void
+        #doAsyncSend(data, callback) void
+        #doAsyncReceive(size, callback) void
+    }
+
+    class WinIOCPNetworkInterface {
+        -SOCKET listenSocket
+        -SOCKET clientSocket
+        -HANDLE iocpHandle
+        -vector~thread~ workerThreads
+        -iocpWorkerThread() void
+    }
+
+    class LinuxAsyncNetworkInterface {
+        -int listenFd
+        -int clientFd
+        -int epollFd
+        -thread epollThread
+        -map socketDataMap
+        -epollWorkerThread() void
+    }
+
+    class NetworkInterfaceFactory {
+        +createNetworkInterface() unique_ptr~NetworkInterface~
+    }
+
+    NetworkInterface <|-- WinIOCPNetworkInterface
+    NetworkInterface <|-- LinuxAsyncNetworkInterface
+    NetworkInterfaceFactory ..> WinIOCPNetworkInterface : Windows
+    NetworkInterfaceFactory ..> LinuxAsyncNetworkInterface : Linux
+```
+
+## 패킷 수신 처리 구조
+
+`PacketReceiver`는 수신 coroutine lifecycle만 담당한다. byte stream 조립, 검증,
+통계 갱신, 제어 메시지 전달은 별도 클래스로 나뉜다.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class PacketReceiver {
+        -NetworkInterface* networkInterface
+        -PacketStreamParser parser
+        -PacketReceiveStats stats
+        -unique_ptr~PacketDispatcher~ dispatcher
+        -Task receiverTask
+        +start(ControlMessageBus) void
+        +stop() void
+        -receiverLoop() Task
+    }
+
+    class PacketStreamParser {
+        -vector buffer
+        +append(data, size) void
+        +drainPackets() vector~ParsedPacket~
+    }
+
+    class PacketReceiveStats {
+        +reset() void
+        +onDataPacket(header, size, payload) void
+        +onChecksumFailure() void
+        +snapshot() TestStats
+    }
+
+    class PacketDispatcher {
+        -ControlMessageBus& messages
+        -PacketReceiveStats& stats
+        +dispatch(packets) void
+    }
+
+    class ControlMessageBus {
+        +deliver(PacketHeader, payload) void
+    }
+
+    PacketReceiver --> NetworkInterface : receive awaiter
+    PacketReceiver *-- PacketStreamParser : value member
+    PacketReceiver *-- PacketReceiveStats : value member
+    PacketReceiver *-- PacketDispatcher : unique_ptr
+    PacketDispatcher --> PacketReceiveStats : reference
+    PacketDispatcher --> ControlMessageBus : reference
+```
+
+## Coroutine 지원 구조
+
+`Task`는 MyIperf session 흐름을 순차 코드처럼 읽게 해주는 최소 coroutine runtime이다.
+`NetworkInterface` awaiter와 `ControlMessageBus::Awaiter`는 외부 이벤트가 완료될 때
+저장해 둔 coroutine handle을 `resume()`한다.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class Task {
+        -handle_type coro
+        +start() void
+        +is_done() bool
+        +operator co_await() Awaiter
+    }
+
+    class TaskAwaiter {
+        -handle_type child
+        +await_ready() bool
+        +await_suspend(parent) void
+        +await_resume() void
+    }
+
+    class Promise {
+        +initial_suspend()
+        +final_suspend()
+        +return_void()
+        +unhandled_exception()
+        +coroutine_handle continuation
+        +exception_ptr exception
+    }
+
+    class NetworkAwaiter {
+        +await_ready() bool
+        +await_suspend(handle) void
+        +await_resume() result
+    }
+
+    class ControlMessageAwaiter {
+        -coroutine_handle continuation
+        +await_ready() bool
+        +await_suspend(handle) void
+        +await_resume() Message
+    }
+
+    Task *-- Promise : coroutine promise
+    Task ..> TaskAwaiter : creates when co_await Task
+    TaskAwaiter --> Promise : stores parent continuation
+    NetworkAwaiter ..> NetworkInterface : calls doAsyncXxx
+    ControlMessageAwaiter --> ControlMessageBus : registers wait
+```
+
+## 읽을 때 중요한 점
+
+- `CLIHandler`는 `TestController`를 복사하지 않고 참조한다.
+- `TestController`가 네트워크, 송신기, 수신기, 제어 메시지 버스를 소유한다.
+- `TestSessionContext`는 소유자가 아니라 session에 필요한 참조를 묶어 전달하는 구조체다.
+- `PacketGenerator`와 `PacketReceiver`의 `NetworkInterface*`는 소유권이 없는 raw pointer다.
+- `ControlChannel`은 session 코드가 `send`와 `waitFor`를 쉽게 쓰도록 만든 facade다.
+- `doAsyncXxx` callback은 platform 내부 구현 세부사항이며, 상위 테스트 흐름은 `co_await` 중심으로 읽힌다.
