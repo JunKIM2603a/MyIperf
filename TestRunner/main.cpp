@@ -2,6 +2,7 @@
 #include "ControlClient.h"
 #include "ControlServer.h"
 #include "ProcessManager.h"
+#include "Version.h"
 #include <algorithm>
 #include <atomic>
 #include <iomanip>
@@ -18,8 +19,13 @@ using namespace TestRunner;
 std::map<std::string, std::string> ParseArguments(int argc, char *argv[]) {
   std::map<std::string, std::string> args;
   for (int i = 1; i < argc; ++i) {
-    if (std::string(argv[i]).substr(0, 2) == "--") {
-      std::string key = std::string(argv[i]).substr(2);
+    std::string token = argv[i];
+    if (token == "-h") {
+      args["help"] = "";
+    } else if (token == "-v") {
+      args["version"] = "";
+    } else if (token.substr(0, 2) == "--") {
+      std::string key = token.substr(2);
       if (i + 1 < argc && std::string(argv[i + 1]).substr(0, 2) != "--") {
         args[key] = argv[++i];
       } else {
@@ -31,10 +37,13 @@ std::map<std::string, std::string> ParseArguments(int argc, char *argv[]) {
 }
 
 void PrintUsage(const char *progName) {
-  std::cout << "Usage: " << progName << " --mode <server|client> [options]\n"
+  std::cout << TestRunner::VersionString() << "\n"
+            << "Usage: " << progName << " --mode <server|client> [options]\n"
             << "Options:\n"
             << "  --control-port <port>   (Default: 9500)\n"
             << "  --ipeftc-path <path>    (Path to IPEFTC.exe)\n"
+            << "  -v, --version           Display version information and exit\n"
+            << "  -h, --help              Display this help message and exit\n"
             << "Server Mode:\n"
             << "  --mode server\n"
             << "Client Mode:\n"
@@ -54,8 +63,34 @@ struct PortTestSummary {
   TestResult serverResult;
 };
 
+void PrintStartupVersions() {
+  std::cout << "TestRunner version:\n"
+            << TestRunner::BuildInfoString() << std::endl;
+
+  auto &processManager = ProcessManager::GetInstance();
+  const std::string ipeftcPath = processManager.GetIPEFTCPath();
+  std::cout << "[ProcessManager] Resolved IPEFTC path: " << ipeftcPath
+            << std::endl;
+
+  const std::string ipeftcVersion =
+      processManager.GetIPEFTCVersion(ipeftcPath);
+  if (!ipeftcVersion.empty()) {
+    std::cout << "[ProcessManager] IPEFTC version:\n"
+              << ipeftcVersion << std::endl;
+  } else {
+    std::cerr << "[ProcessManager] Warning: Could not read IPEFTC version. "
+                 "Continuing with test execution."
+              << std::endl;
+  }
+}
+
 int main(int argc, char *argv[]) {
   auto args = ParseArguments(argc, argv);
+
+  if (args.find("version") != args.end()) {
+    std::cout << TestRunner::BuildInfoString() << std::endl;
+    return 0;
+  }
 
   if (args.find("help") != args.end() || args.find("mode") == args.end()) {
     PrintUsage(argv[0]);
@@ -71,6 +106,8 @@ int main(int argc, char *argv[]) {
   if (args.find("ipeftc-path") != args.end()) {
     ProcessManager::GetInstance().SetIPEFTCPath(args["ipeftc-path"]);
   }
+
+  PrintStartupVersions();
 
   if (mode == "server") {
     ControlServer server(controlPort);

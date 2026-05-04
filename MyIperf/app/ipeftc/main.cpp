@@ -1,6 +1,7 @@
 #include "CLIHandler.h"
 #include "myiperf/Logger.h"
 #include "myiperf/TestController.h"
+#include "myiperf/Version.h"
 
 #include <iostream>
 #include <string>
@@ -17,15 +18,19 @@
  * @return 0 on successful execution, non-zero otherwise.
  */
 int main(int argc, char* argv[]) {
-    std::cout << "=============== START ==============\n" << std::endl;
-
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
             CLIHandler::printHelp();
             return 0;
         }
+        if (arg == "--version" || arg == "-v") {
+            std::cout << myiperf::buildInfoString() << std::endl;
+            return 0;
+        }
     }
+
+    std::cout << "=============== START ==============\n" << std::endl;
 
     Logger::log("Info: IPEFTC (IPerf Test Client/Server) application starting.");
 

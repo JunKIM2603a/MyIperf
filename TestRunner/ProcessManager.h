@@ -54,6 +54,10 @@ public:
   // Set explicit path to IPEFTC executable
   void SetIPEFTCPath(const std::string &path);
 
+  // Run IPEFTC --version and return its stdout. Returns an empty string if the
+  // executable cannot be launched or does not support the option.
+  std::string GetIPEFTCVersion(const std::string &ipeftcPath);
+
   // Wait for process to complete and capture output
   // Returns the captured output string
   std::string WaitForProcessAndCaptureOutput(ProcessHandles &handles);

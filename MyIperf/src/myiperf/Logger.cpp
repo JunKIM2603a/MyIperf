@@ -1,4 +1,5 @@
 #include "myiperf/Logger.h"
+#include "myiperf/Version.h"
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -68,6 +69,16 @@ std::string colorizeLine(const std::string& message, const std::string& formatte
     if (message.rfind("CONTROL:", 0) == 0) return std::string("\x1b[95m") + formatted + "\x1b[0m";
     if (message.rfind("HANDSHAKE:", 0) == 0) return std::string("\x1b[95m") + formatted + "\x1b[0m";
     return formatted;
+}
+
+std::string buildInfoOneLine() {
+    std::string info = myiperf::buildInfoString();
+    std::string::size_type pos = 0;
+    while ((pos = info.find('\n', pos)) != std::string::npos) {
+        info.replace(pos, 1, " | ");
+        pos += 3;
+    }
+    return info;
 }
 
 } // namespace
@@ -210,6 +221,7 @@ void Logger::start(const Config& config) {
     } else {
         log("Info: Logger started.");
     }
+    log("Info: IPEFTC version: " + buildInfoOneLine());
 
     std::ostringstream optionStream;
     optionStream << " --mode " << mode

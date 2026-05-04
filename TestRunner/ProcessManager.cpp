@@ -1,8 +1,9 @@
 #include "ProcessManager.h"
 #include "IpeftcOutputParser.h"
 #include <algorithm>
-#include <cstdlib>
+#include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <mutex>
@@ -180,6 +181,15 @@ std::string BuildCommandLine(const std::string &exe,
   return commandLine;
 }
 
+std::string TrimCopy(std::string value) {
+  auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+  value.erase(value.begin(),
+              std::find_if(value.begin(), value.end(), notSpace));
+  value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(),
+              value.end());
+  return value;
+}
+
 std::vector<std::string> BuildServerArgs(const TestConfig &config) {
   std::vector<std::string> args{"--mode", "server"};
   const std::string bindIP =
@@ -246,6 +256,138 @@ bool CreateProcessWithStdoutHandle(const std::string &ipeftcPath,
 }
 #endif
 
+std::string CaptureCommandOutput(const std::string &exe,
+                                 const std::vector<std::string> &args,
+                                 int timeoutMs) {
+#ifdef _WIN32
+  HANDLE stdOutRead = NULL;
+  HANDLE stdOutWrite = NULL;
+  SECURITY_ATTRIBUTES saAttr;
+  saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+  saAttr.bInheritHandle = TRUE;
+  saAttr.lpSecurityDescriptor = NULL;
+
+  if (!CreatePipe(&stdOutRead, &stdOutWrite, &saAttr, 64 * 1024)) {
+    return "";
+  }
+  if (!SetHandleInformation(stdOutRead, HANDLE_FLAG_INHERIT, 0)) {
+    CloseHandle(stdOutRead);
+    CloseHandle(stdOutWrite);
+    return "";
+  }
+
+  PROCESS_INFORMATION processInfo;
+  ZeroMemory(&processInfo, sizeof(processInfo));
+  const std::string cmdLine = BuildCommandLine(exe, args);
+  if (!CreateProcessWithStdoutHandle(exe, cmdLine, stdOutWrite, processInfo)) {
+    CloseHandle(stdOutRead);
+    CloseHandle(stdOutWrite);
+    return "";
+  }
+
+  CloseHandle(stdOutWrite);
+  stdOutWrite = NULL;
+
+  DWORD waitResult =
+      WaitForSingleObject(processInfo.hProcess, static_cast<DWORD>(timeoutMs));
+  if (waitResult == WAIT_TIMEOUT) {
+    ::TerminateProcess(processInfo.hProcess, 1);
+    WaitForSingleObject(processInfo.hProcess, 2000);
+  }
+
+  std::string output;
+  char buffer[4096];
+  DWORD bytesRead = 0;
+  while (ReadFile(stdOutRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) &&
+         bytesRead > 0) {
+    buffer[bytesRead] = '\0';
+    output.append(buffer, bytesRead);
+  }
+
+  CloseHandle(stdOutRead);
+  CloseHandle(processInfo.hProcess);
+  CloseHandle(processInfo.hThread);
+  return TrimCopy(output);
+#else
+  int pipefd[2];
+  if (pipe(pipefd) == -1) {
+    return "";
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return "";
+  }
+
+  if (pid == 0) {
+    close(pipefd[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
+    dup2(pipefd[1], STDERR_FILENO);
+    close(pipefd[1]);
+
+    std::vector<std::string> commandArgs;
+    commandArgs.push_back(exe);
+    commandArgs.insert(commandArgs.end(), args.begin(), args.end());
+
+    std::vector<char *> cArgs;
+    for (auto &arg : commandArgs) {
+      cArgs.push_back(&arg[0]);
+    }
+    cArgs.push_back(nullptr);
+
+    execvp(exe.c_str(), cArgs.data());
+    _exit(1);
+  }
+
+  close(pipefd[1]);
+  std::string output;
+  auto startTime = std::chrono::steady_clock::now();
+  const auto timeout = std::chrono::milliseconds(timeoutMs);
+  int flags = fcntl(pipefd[0], F_GETFL, 0);
+  if (flags != -1) {
+    fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+  }
+
+  int status = 0;
+  while (true) {
+    char buffer[4096];
+    ssize_t bytesRead = read(pipefd[0], buffer, sizeof(buffer) - 1);
+    if (bytesRead > 0) {
+      buffer[bytesRead] = '\0';
+      output.append(buffer, bytesRead);
+    }
+
+    pid_t result = waitpid(pid, &status, WNOHANG);
+    if (result == pid) {
+      break;
+    }
+
+    if (std::chrono::steady_clock::now() - startTime > timeout) {
+      kill(pid, SIGTERM);
+      waitpid(pid, nullptr, 0);
+      break;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  while (true) {
+    char buffer[4096];
+    ssize_t bytesRead = read(pipefd[0], buffer, sizeof(buffer) - 1);
+    if (bytesRead <= 0) {
+      break;
+    }
+    buffer[bytesRead] = '\0';
+    output.append(buffer, bytesRead);
+  }
+
+  close(pipefd[0]);
+  return TrimCopy(output);
+#endif
+}
+
 } // namespace
 
 std::string ProcessManager::GetIPEFTCPath() {
@@ -264,6 +406,16 @@ std::string ProcessManager::GetIPEFTCPath() {
 
 void ProcessManager::SetIPEFTCPath(const std::string &path) {
   overrideIPEFTCPath = path;
+}
+
+std::string ProcessManager::GetIPEFTCVersion(const std::string &ipeftcPath) {
+  if (!ValidateIpeftcPath(ipeftcPath)) {
+    return "";
+  }
+  std::string version = CaptureCommandOutput(ipeftcPath, {"--version"}, 5000);
+  version.erase(std::remove(version.begin(), version.end(), '\r'),
+                version.end());
+  return TrimCopy(version);
 }
 
 #ifdef _WIN32

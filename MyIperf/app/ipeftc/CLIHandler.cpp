@@ -1,5 +1,6 @@
 #include "CLIHandler.h"
 #include "myiperf/Logger.h"
+#include "myiperf/Version.h"
 #include <iostream>
 #include <algorithm> // Required for std::transform
 #include <vector> // Required for std::vector
@@ -93,7 +94,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
-        if (arg == "--help" || arg == "-h") {
+        if (arg == "--help" || arg == "-h" || arg == "--version" || arg == "-v") {
             // Handled in main
         } else if (arg == "--mode" && i + 1 < argc) {
             mode = argv[++i];
@@ -131,7 +132,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
                 throw std::runtime_error("Invalid value for --quiet. Must be 'true' or 'false'.");
             }
         } else if (arg.rfind("--", 0) == 0) {
-            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--help", "-h"};
+            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--help", "-h", "--version", "-v"};
             bool is_known = false;
             for(const auto& known : known_args) {
                 if (arg == known) {
@@ -162,6 +163,8 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
  */
 void CLIHandler::printHelp() {
     std::cout << "MyIperf - A simple network performance testing tool\n\n" \
+              << "VERSION:\n"
+              << "  " << myiperf::versionString() << "\n\n"
               << "DESCRIPTION:\n"
               << "  This tool measures network throughput between a client and a server. \n"
               << "  It works by sending a configured number of packets of a specific size \n"
@@ -180,6 +183,7 @@ void CLIHandler::printHelp() {
               << "  --interval-ms <ms>        Delay between sending packets in milliseconds (0 for continuous send).\n"
               << "  --save-logs <true|false>  Save console logs to a file in the 'Log' directory.\n"
               << "  --handshake-timeout-ms <ms>  Timeout to wait for CONFIG_ACK before aborting (default 5000).\n"
+              << "  -v, --version             Display version information and exit.\n"
               << "  -h, --help                Display this help message and exit.\n\n"
               << "UNDERSTANDING THE FINAL REPORT:\n"
               << "  The report is split into two main sections:\n"
