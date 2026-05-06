@@ -191,8 +191,15 @@ bool ControlClient::RunTest(const std::string &serverIP, int controlPort,
   std::cout << "[ControlClient] Client test completed" << std::endl;
 
   // 5. Parse Client Results
-  outClientResult = ProcessManager::GetInstance().ParseOutput(
-      clientOutput, "Client", config.port);
+  std::string resultError;
+  if (!ProcessManager::GetInstance().ParseResultFile(runConfig, "Client",
+                                                     outClientResult,
+                                                     resultError)) {
+    std::cerr << "[ControlClient] " << resultError
+              << ". Falling back to stdout parser." << std::endl;
+    outClientResult = ProcessManager::GetInstance().ParseOutput(
+        clientOutput, "Client", config.port);
+  }
   outClientResult.expectedPackets = config.numPackets;
   outClientResult.expectedBytes =
       (long long)config.packetSize * config.numPackets;

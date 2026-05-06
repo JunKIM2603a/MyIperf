@@ -16,3 +16,10 @@ TestRunner/build/
 TestRunner/Log/
 TestRunner/_plan_check_build/
 Log/
+
+# ResultPipeVerifier build artifacts and generated smoke outputs
+ResultPipeVerifier/build/
+ResultPipeVerifier/results/
+
+# ResultJsonViewer build artifacts
+ResultJsonViewer/build/

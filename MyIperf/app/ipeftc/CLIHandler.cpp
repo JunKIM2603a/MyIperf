@@ -33,13 +33,14 @@ bool CLIHandler::run(int argc, char* argv[]) {
 
     try {
         // Parse command-line arguments to get the test configuration.
-        Config config = parseArgs(argc, argv);
+        ParsedCommandLine parsed = parseArgs(argc, argv);
+        Config& config = parsed.config;
 
         // Start the logger with the given configuration
         Logger::start(config);
 
         // Start the test with the parsed configuration.
-        testController.startTest(config);
+        testController.startTest(config, parsed.runOptions);
 
         // If in server mode, wait for the test to complete before shutting down.
         if (config.getMode() == Config::TestMode::SERVER) {
@@ -67,8 +68,10 @@ bool CLIHandler::run(int argc, char* argv[]) {
  * @param argv Argument values.
  * @return A Config object with the parsed settings.
  */
-Config CLIHandler::parseArgs(int argc, char* argv[]) {
-    Config config; // Start with default config
+CLIHandler::ParsedCommandLine CLIHandler::parseArgs(int argc, char* argv[]) {
+    ParsedCommandLine parsed;
+    Config& config = parsed.config;
+    RunOptions& runOptions = parsed.runOptions;
     std::string mode = "";
     std::string configFilePath = "";
 
@@ -122,6 +125,14 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
             }
         } else if (arg == "--handshake-timeout-ms" && i + 1 < argc) {
             config.setHandshakeTimeoutMs(std::stoi(argv[++i]));
+        } else if (arg == "--run-id" && i + 1 < argc) {
+            runOptions.runId = argv[++i];
+        } else if (arg == "--result-dir" && i + 1 < argc) {
+            runOptions.resultDir = argv[++i];
+        } else if (arg == "--result-json" && i + 1 < argc) {
+            runOptions.resultJson = argv[++i];
+        } else if (arg == "--result-pipe" && i + 1 < argc) {
+            runOptions.resultPipe = argv[++i];
          } else if ((arg == "--quiet" || arg == "-q") && i + 1 < argc) {
              std::string val = argv[++i];
              if (val == "true") {
@@ -132,7 +143,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
                 throw std::runtime_error("Invalid value for --quiet. Must be 'true' or 'false'.");
             }
         } else if (arg.rfind("--", 0) == 0) {
-            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--help", "-h", "--version", "-v"};
+            const std::vector<std::string> known_args = {"--mode", "--config", "--target", "--port", "--packet-size", "--num-packets", "--interval-ms", "--save-logs", "--handshake-timeout-ms", "--run-id", "--result-dir", "--result-json", "--result-pipe", "--quiet", "--help", "-h", "--version", "-v"};
             bool is_known = false;
             for(const auto& known : known_args) {
                 if (arg == known) {
@@ -155,7 +166,7 @@ Config CLIHandler::parseArgs(int argc, char* argv[]) {
         throw std::runtime_error("Error: Mode (--mode) must be specified as either 'client' or 'server'.");
     }
 
-    return config;
+    return parsed;
 }
 
 /**
@@ -183,6 +194,10 @@ void CLIHandler::printHelp() {
               << "  --interval-ms <ms>        Delay between sending packets in milliseconds (0 for continuous send).\n"
               << "  --save-logs <true|false>  Save console logs to a file in the 'Log' directory.\n"
               << "  --handshake-timeout-ms <ms>  Timeout to wait for CONFIG_ACK before aborting (default 5000).\n"
+              << "  --run-id <id>             Set a stable ID for this test run.\n"
+              << "  --result-dir <path>       Directory for result-<runId>-<ROLE>.json files (default Results).\n"
+              << "  --result-json <path>      Also write this run result to the exact JSON path.\n"
+              << "  --result-pipe <name>      Publish result events as JSON lines to a separate result pipe.\n"
               << "  -v, --version             Display version information and exit.\n"
               << "  -h, --help                Display this help message and exit.\n\n"
               << "UNDERSTANDING THE FINAL REPORT:\n"

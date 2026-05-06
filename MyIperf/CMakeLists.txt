@@ -64,7 +64,9 @@ set(MYIPERF_CORE_PUBLIC_HEADERS
     include/myiperf/Logger.h
     include/myiperf/NetworkInterface.h
     include/myiperf/Protocol.h
+    include/myiperf/RunOptions.h
     include/myiperf/TestController.h
+    include/myiperf/TestRunResult.h
     include/myiperf/Version.h
 )
 
@@ -80,6 +82,7 @@ set(MYIPERF_CORE_PRIVATE_HEADERS
     src/myiperf/PacketReceiver.h
     src/myiperf/PacketStreamParser.h
     src/myiperf/ParsedPacket.h
+    src/myiperf/ResultEventSink.h
     src/myiperf/ServerTestSession.h
     src/myiperf/TestSessionContext.h
 )
@@ -98,6 +101,7 @@ set(MYIPERF_CORE_SOURCES
     src/myiperf/PacketReceiveStats.cpp
     src/myiperf/PacketReceiver.cpp
     src/myiperf/PacketStreamParser.cpp
+    src/myiperf/ResultEventSink.cpp
     src/myiperf/ServerTestSession.cpp
     src/myiperf/TestController.cpp
     src/myiperf/Version.cpp

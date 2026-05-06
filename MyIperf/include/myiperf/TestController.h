@@ -3,12 +3,15 @@
 #include "myiperf/Config.h"
 #include "myiperf/CoroutineSupport.h"
 #include "myiperf/Protocol.h"
+#include "myiperf/RunOptions.h"
+#include "myiperf/TestRunResult.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 class ControlChannel;
@@ -16,6 +19,7 @@ class ControlMessageBus;
 class NetworkInterface;
 class PacketGenerator;
 class PacketReceiver;
+class ResultEventSink;
 
 /**
  * @class TestController
@@ -76,6 +80,9 @@ public:
      * @param config The configuration for the test.
      */
     void startTest(const Config& config);
+    void startTest(const Config& config, const RunOptions& options);
+    std::future<TestRunResult> runTestAsync(const Config& config, const RunOptions& options = RunOptions{});
+    TestRunResult getLastResult() const;
 
     /**
      * @brief Stops the currently running test.
@@ -91,7 +98,7 @@ public:
 
 	    State getFinalState() const { return currentState.load(); }
 	    bool hasError() const { return currentState.load() == State::ERRORED; }
-	    bool completedSuccessfully() const { return currentState.load() == State::FINISHED; }
+	    bool completedSuccessfully() const;
 
 private:
     friend class CLIHandler;
@@ -114,6 +121,7 @@ private:
     std::mutex m_stateMachineMutex;
     /** @brief The configuration for the current test. */
     Config currentConfig;
+    RunOptions currentRunOptions;
     /** @brief Promise to signal test completion to the main thread. */
     std::promise<void> testCompletionPromise;
     /** @brief Flag to ensure the test completion promise is set only once. */
@@ -124,6 +132,16 @@ private:
     TestStats m_serverStatsPhase1;
     TestStats m_clientStatsPhase2;
     TestStats m_serverStatsPhase2;
+
+    mutable std::mutex m_resultMutex;
+    TestRunResult m_lastResult;
+    std::unique_ptr<ResultEventSink> resultEventSink;
+    std::atomic<bool> m_resultFinalized;
+    std::atomic<bool> m_testStarted;
+    std::atomic<bool> m_phase1EventPublished;
+    std::atomic<bool> m_phase2EventPublished;
+    std::string m_startedAt;
+    std::string m_resultExportWarning;
 
     // --- CLI Synchronization ---
     /** @brief Mutex for blocking the CLI thread while a test is running. */
@@ -157,4 +175,9 @@ private:
 
     Task runTestCoroutine();
     void signalCompletion();
+    void finalizeResultOnce(const std::string& failureReason = "");
+    TestRunResult buildCurrentResult(const std::string& failureReason) const;
+    std::string exportResult(const TestRunResult& result);
+    void publishRunStarted();
+    void publishPhaseResult(int phaseNumber);
 };

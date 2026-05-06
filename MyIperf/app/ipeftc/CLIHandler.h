@@ -2,6 +2,7 @@
 
 #include "myiperf/TestController.h"
 #include "myiperf/ConfigParser.h"
+#include "myiperf/RunOptions.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -36,6 +37,11 @@ public:
 
 
 private:
+    struct ParsedCommandLine {
+        Config config;
+        RunOptions runOptions;
+    };
+
     /**
      * @brief Parses the command-line arguments to create a configuration.
      * @param argc The number of command-line arguments.
@@ -43,7 +49,7 @@ private:
      * @return A Config object populated with the settings from the arguments.
      * @throws std::runtime_error if arguments are invalid or missing.
      */
-    Config parseArgs(int argc, char* argv[]);
+    ParsedCommandLine parseArgs(int argc, char* argv[]);
 
     /**< A reference to the TestController to manage the test. */
     TestController& testController;

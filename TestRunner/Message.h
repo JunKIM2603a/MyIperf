@@ -18,6 +18,8 @@ struct TestConfig {
   int sendIntervalMs = 0;                 // `--interval-ms <ms>`
   bool saveLogs = true;
   std::string protocol = "TCP"; // `--protocol <protocol>`
+  std::string runId;
+  std::string resultDir = "Results";
 
   TestConfig() = default;
 };

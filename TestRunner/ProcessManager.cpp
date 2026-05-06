@@ -1,10 +1,12 @@
 #include "ProcessManager.h"
 #include "IpeftcOutputParser.h"
+#include "nlohmann/json.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -202,6 +204,14 @@ std::vector<std::string> BuildServerArgs(const TestConfig &config) {
   }
   args.push_back("--save-logs");
   args.push_back(config.saveLogs ? "true" : "false");
+  if (!config.runId.empty()) {
+    args.push_back("--run-id");
+    args.push_back(config.runId);
+  }
+  if (!config.resultDir.empty()) {
+    args.push_back("--result-dir");
+    args.push_back(config.resultDir);
+  }
   return args;
 }
 
@@ -229,7 +239,48 @@ std::vector<std::string> BuildClientArgs(const TestConfig &config) {
     args.push_back("--interval-ms");
     args.push_back(std::to_string(config.sendIntervalMs));
   }
+  if (!config.runId.empty()) {
+    args.push_back("--run-id");
+    args.push_back(config.runId);
+  }
+  if (!config.resultDir.empty()) {
+    args.push_back("--result-dir");
+    args.push_back(config.resultDir);
+  }
   return args;
+}
+
+std::string ResultRole(const std::string &role) {
+  return role == "Client" ? "CLIENT" : "SERVER";
+}
+
+std::filesystem::path ResultFilePath(const TestConfig &config,
+                                     const std::string &role) {
+  return std::filesystem::path(config.resultDir) /
+         ("result-" + config.runId + "-" + ResultRole(role) + ".json");
+}
+
+long long JsonLongLong(const nlohmann::json &j, const char *key) {
+  return j.at(key).get<long long>();
+}
+
+double JsonDouble(const nlohmann::json &j, const char *key) {
+  return j.at(key).get<double>();
+}
+
+void FillFromStats(const nlohmann::json &stats, bool preferSent,
+                   TestResult &result) {
+  result.totalBytes =
+      preferSent ? JsonLongLong(stats, "totalBytesSent")
+                 : JsonLongLong(stats, "totalBytesReceived");
+  result.totalPackets =
+      preferSent ? JsonLongLong(stats, "totalPacketsSent")
+                 : JsonLongLong(stats, "totalPacketsReceived");
+  result.duration = JsonDouble(stats, "duration");
+  result.throughput = JsonDouble(stats, "throughputMbps");
+  result.sequenceErrors = JsonLongLong(stats, "sequenceErrorCount");
+  result.checksumErrors = JsonLongLong(stats, "failedChecksumCount");
+  result.contentMismatches = JsonLongLong(stats, "contentMismatchCount");
 }
 
 #ifdef _WIN32
@@ -784,6 +835,67 @@ bool ProcessManager::WaitForServerReady(ProcessHandles &handles, int timeoutMs) 
 TestResult ProcessManager::ParseOutput(const std::string &output,
                                        const std::string &role, int port) {
   return IpeftcOutputParser::Parse(output, role, port);
+}
+
+bool ProcessManager::ParseResultFile(const TestConfig &config,
+                                     const std::string &role,
+                                     TestResult &result, std::string &error) {
+  result = TestResult{};
+  result.role = role;
+  result.port = config.port;
+
+  if (config.runId.empty()) {
+    error = "runId is empty; cannot locate MyIperf result JSON";
+    return false;
+  }
+
+  const auto path = ResultFilePath(config, role);
+  std::ifstream in(path);
+  if (!in.is_open()) {
+    error = "Result JSON not found: " + path.string();
+    return false;
+  }
+
+  try {
+    nlohmann::json root = nlohmann::json::parse(in);
+    const std::string runId = root.at("runId").get<std::string>();
+    if (runId != config.runId) {
+      error = "Result JSON runId mismatch (file=" + runId +
+              ", expected=" + config.runId + ")";
+      return false;
+    }
+
+    if (role == "Client") {
+      const auto &phase2 = root.at("phase2");
+      if (phase2.at("receiverRole").get<std::string>() == "CLIENT") {
+        FillFromStats(phase2.at("receiverStats"), false, result);
+      } else {
+        FillFromStats(root.at("phase1").at("senderStats"), true, result);
+      }
+    } else {
+      const auto &phase1 = root.at("phase1");
+      if (phase1.at("receiverRole").get<std::string>() == "SERVER") {
+        FillFromStats(phase1.at("receiverStats"), false, result);
+      } else {
+        FillFromStats(root.at("phase2").at("senderStats"), true, result);
+      }
+    }
+
+    result.success = root.value("success", false);
+    result.failureReason = root.value("failureReason", "");
+    if (!root.value("resultExportWarning", std::string()).empty()) {
+      if (!result.failureReason.empty()) {
+        result.failureReason += "; ";
+      }
+      result.failureReason +=
+          "Result export warning: " +
+          root.value("resultExportWarning", std::string());
+    }
+    return true;
+  } catch (const std::exception &e) {
+    error = "Failed to parse result JSON " + path.string() + ": " + e.what();
+    return false;
+  }
 }
 
 } // namespace TestRunner

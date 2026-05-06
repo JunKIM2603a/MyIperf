@@ -17,7 +17,9 @@ void to_json(json &j, const TestConfig &c) {
            {"numPackets", c.numPackets},
            {"sendIntervalMs", c.sendIntervalMs},
            {"saveLogs", c.saveLogs},
-           {"protocol", c.protocol}};
+           {"protocol", c.protocol},
+           {"runId", c.runId},
+           {"resultDir", c.resultDir}};
 }
 
 // Helper to convert JSON to TestConfig
@@ -34,6 +36,10 @@ void from_json(const json &j, TestConfig &c) {
   j.at("sendIntervalMs").get_to(c.sendIntervalMs);
   j.at("saveLogs").get_to(c.saveLogs);
   j.at("protocol").get_to(c.protocol);
+  if (j.contains("runId"))
+    j.at("runId").get_to(c.runId);
+  if (j.contains("resultDir"))
+    j.at("resultDir").get_to(c.resultDir);
 }
 
 // Helper to convert TestResult to JSON
@@ -202,8 +208,7 @@ void AnalyzeTestResult(TestResult &result, long long expectedPackets,
   bool passed = true;
   std::string reason;
 
-  if (!result.failureReason.empty() && result.totalPackets == 0 &&
-      result.totalBytes == 0) {
+  if (!result.success && !result.failureReason.empty()) {
     passed = false;
     reason += result.failureReason + "; ";
   }

@@ -90,6 +90,7 @@ Task ClientTestSession::runClientToServerPhase() {
                                    context.clientStatsPhase1,
                                    "Server-side (received)",
                                    context.serverStatsPhase1);
+  context.notifyPhaseComplete(1);
 }
 
 Task ClientTestSession::runServerToClientPhase() {
@@ -120,4 +121,5 @@ Task ClientTestSession::runServerToClientPhase() {
                                    context.serverStatsPhase2,
                                    "Client-side (received)",
                                    context.clientStatsPhase2);
+  context.notifyPhaseComplete(2);
 }

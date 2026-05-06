@@ -219,6 +219,7 @@ void ControlServer::HandleClient(SOCKET clientSocket) {
   ProcessHandles ipeftcProcess;
   bool ipeftcRunning = false;
   int currentTestPort = 0;
+  TestConfig currentConfig;
 
   try {
     while (true) {
@@ -232,6 +233,7 @@ void ControlServer::HandleClient(SOCKET clientSocket) {
 
       if (type == MessageType::CONFIG_REQUEST) {
         ConfigRequestMessage req = DeserializeConfigRequest(jsonStr);
+        currentConfig = req.config;
         std::cout << "[ControlServer] Processing CONFIG_REQUEST for port "
                   << req.config.port << std::endl;
 
@@ -278,9 +280,14 @@ void ControlServer::HandleClient(SOCKET clientSocket) {
                   ipeftcProcess);
           ipeftcRunning = false;
 
-          // Parse output
-          serverResult = ProcessManager::GetInstance().ParseOutput(
-              output, "Server", currentTestPort);
+          std::string resultError;
+          if (!ProcessManager::GetInstance().ParseResultFile(
+                  currentConfig, "Server", serverResult, resultError)) {
+            std::cerr << "[ControlServer] " << resultError
+                      << ". Falling back to stdout parser." << std::endl;
+            serverResult = ProcessManager::GetInstance().ParseOutput(
+                output, "Server", currentTestPort);
+          }
         } else {
           serverResult.failureReason = "IPEFTC server was not running";
           serverResult.success = false;

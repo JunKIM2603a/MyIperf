@@ -81,6 +81,7 @@ Task ServerTestSession::runClientToServerPhase() {
                                    context.clientStatsPhase1,
                                    "Server-side (received)",
                                    context.serverStatsPhase1);
+  context.notifyPhaseComplete(1);
 
   context.transitionTo(TestController::State::WAITING_FOR_CLIENT_READY);
   co_await context.control.send(
@@ -115,6 +116,7 @@ Task ServerTestSession::runServerToClientPhase() {
                                    context.serverStatsPhase2,
                                    "Client-side (received)",
                                    context.clientStatsPhase2);
+  context.notifyPhaseComplete(2);
 
   context.transitionTo(TestController::State::WAITING_FOR_SHUTDOWN_ACK);
   co_await context.control.send(

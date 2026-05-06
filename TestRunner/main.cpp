@@ -53,6 +53,7 @@ void PrintUsage(const char *progName) {
             << "  --packet-size <bytes>   (Default: 8192)\n"
             << "  --num-packets <count>   (Default: 10000)\n"
             << "  --interval-ms <ms>      (Default: 0)\n"
+            << "  --result-dir <path>     (Default: Results)\n"
             << "  --num-ports <count>     (Default: 1, Multi-port test)\n"
             << "  --total-runs <count>    (Default: 1, Repeat test)\n";
 }
@@ -139,6 +140,10 @@ int main(int argc, char *argv[]) {
     if (args.find("interval-ms") != args.end())
       intervalMs = std::stoi(args["interval-ms"]);
 
+    std::string resultDir = "Results";
+    if (args.find("result-dir") != args.end())
+      resultDir = args["result-dir"];
+
     int numPorts = 1;
     if (args.find("num-ports") != args.end())
       numPorts = std::stoi(args["num-ports"]);
@@ -165,6 +170,7 @@ int main(int argc, char *argv[]) {
     // Use a flat list for global summary for simplicity, or structured by run
     std::vector<PortTestSummary> globalHistory;
     std::atomic<bool> anyFailure{false};
+    std::atomic<unsigned long long> runIdCounter{0};
 
     for (int run = 1; run <= totalRuns; ++run) {
       if (totalRuns > 1) {
@@ -193,6 +199,10 @@ int main(int argc, char *argv[]) {
           config.sendIntervalMs = intervalMs;
           config.targetIP = serverIP; // Will be handled by ControlClient
           config.serverBindIP = serverBindIP;
+          config.resultDir = resultDir;
+          config.runId = "tr-run" + std::to_string(run) + "-port" +
+                         std::to_string(currentPort) + "-" +
+                         std::to_string(runIdCounter.fetch_add(1));
 
           TestResult clientRes, serverRes;
           if (client.RunTest(serverIP, controlPort, config, clientRes,

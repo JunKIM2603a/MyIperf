@@ -70,6 +70,8 @@ public:
   // Parse captured IPEFTC output to extract TestResult
   TestResult ParseOutput(const std::string &output, const std::string &role,
                          int port);
+  bool ParseResultFile(const TestConfig &config, const std::string &role,
+                       TestResult &result, std::string &error);
 
 private:
   ProcessManager() = default;

@@ -20,4 +20,5 @@ struct TestSessionContext {
   TestStats& clientStatsPhase2;
   TestStats& serverStatsPhase2;
   std::function<void(TestController::State)> transitionTo;
+  std::function<void(int)> notifyPhaseComplete;
 };
